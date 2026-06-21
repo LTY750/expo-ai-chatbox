@@ -1,6 +1,6 @@
 // 服务商详情页（设置二级页）—— 编辑/新增一个服务商
 // 名称/类型/baseURL/Key + 获取模型弹窗 + 已添加模型列表 + 删除
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Modal,
@@ -14,6 +14,7 @@ import {
 import { useChatStore } from '../store';
 import { getProviderKey } from '../settings';
 import { makeProvider } from '../providers/factory';
+import { useTheme, type ThemeColors } from '../theme';
 import type { ProviderType } from '../types';
 
 export default function ProviderDetailScreen({
@@ -23,6 +24,9 @@ export default function ProviderDetailScreen({
   providerId: string | null; // null = 新增
   onBack: () => void;
 }) {
+  const theme = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
+
   const providers = useChatStore((s) => s.settings.providers);
   const addProvider = useChatStore((s) => s.addProvider);
   const updateProvider = useChatStore((s) => s.updateProvider);
@@ -146,7 +150,7 @@ export default function ProviderDetailScreen({
           value={name}
           onChangeText={setName}
           placeholder="例如：硅基流动"
-          placeholderTextColor="#999"
+          placeholderTextColor={theme.placeholder}
         />
 
         <Text style={styles.label}>API 类型</Text>
@@ -170,7 +174,7 @@ export default function ProviderDetailScreen({
           value={baseURL}
           onChangeText={setBaseURL}
           placeholder={type === 'openai' ? 'https://api.xxx.com/v1' : 'https://api.anthropic.com'}
-          placeholderTextColor="#999"
+          placeholderTextColor={theme.placeholder}
           autoCapitalize="none"
           autoCorrect={false}
         />
@@ -181,7 +185,7 @@ export default function ProviderDetailScreen({
           value={apiKey}
           onChangeText={setKey}
           placeholder="sk-…"
-          placeholderTextColor="#999"
+          placeholderTextColor={theme.placeholder}
           secureTextEntry
           autoCapitalize="none"
           autoCorrect={false}
@@ -210,7 +214,7 @@ export default function ProviderDetailScreen({
             value={newModel}
             onChangeText={setNewModel}
             placeholder="手动添加模型 ID"
-            placeholderTextColor="#999"
+            placeholderTextColor={theme.placeholder}
             autoCapitalize="none"
             autoCorrect={false}
             onSubmitEditing={addManual}
@@ -246,7 +250,7 @@ export default function ProviderDetailScreen({
             <Text style={styles.modalTitle}>选择要添加的模型</Text>
             {fetching ? (
               <View style={styles.modalLoading}>
-                <ActivityIndicator size="large" />
+                <ActivityIndicator size="large" color={theme.primary} />
                 <Text style={styles.hint}>正在获取…</Text>
               </View>
             ) : fetchErr ? (
@@ -282,136 +286,140 @@ export default function ProviderDetailScreen({
     </View>
   );
 }
-// ===STYLES_BELOW===
 
-const styles = StyleSheet.create({
-  flex: { flex: 1, backgroundColor: '#fff' },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#ddd',
-    backgroundColor: '#fafafa',
-  },
-  headerTitle: { fontSize: 16, fontWeight: '600' },
-  headerBtn: { fontSize: 14, color: '#2563eb' },
-  content: { padding: 16, paddingBottom: 48 },
-  label: { fontSize: 14, fontWeight: '600', marginTop: 16, marginBottom: 6 },
-  hint: { fontSize: 12, color: '#999', marginTop: 4, marginBottom: 6 },
-  input: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 15,
-  },
-  segment: {
-    flexDirection: 'row',
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 10,
-    overflow: 'hidden',
-  },
-  segBtn: { flex: 1, paddingVertical: 10, alignItems: 'center' },
-  segBtnActive: { backgroundColor: '#2563eb' },
-  segText: { fontSize: 14, color: '#333' },
-  segTextActive: { color: '#fff', fontWeight: '600' },
-  fetchBtn: {
-    marginTop: 16,
-    borderWidth: 1,
-    borderColor: '#2563eb',
-    borderRadius: 10,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  fetchText: { color: '#2563eb', fontWeight: '600', fontSize: 15 },
-  modelRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#eee',
-  },
-  modelName: { fontSize: 15, color: '#333', flex: 1, marginRight: 8 },
-  modelDel: { fontSize: 15 },
-  addRow: { flexDirection: 'row', alignItems: 'center', marginTop: 12 },
-  addInput: { flex: 1 },
-  addBtn: {
-    marginLeft: 8,
-    backgroundColor: '#2563eb',
-    borderRadius: 10,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  addBtnDisabled: { backgroundColor: '#9db9f0', opacity: 0.6 },
-  addBtnText: { color: '#fff', fontWeight: '600' },
-  saveBtn: {
-    backgroundColor: '#2563eb',
-    borderRadius: 10,
-    paddingVertical: 14,
-    alignItems: 'center',
-    marginTop: 28,
-  },
-  saveText: { color: '#fff', fontSize: 16, fontWeight: '600' },
-  delBtn: {
-    borderWidth: 1,
-    borderColor: '#dc2626',
-    borderRadius: 10,
-    paddingVertical: 12,
-    alignItems: 'center',
-    marginTop: 16,
-  },
-  delBtnText: { color: '#dc2626', fontWeight: '600' },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'center',
-    padding: 24,
-  },
-  modalSheet: {
-    backgroundColor: '#fff',
-    borderRadius: 14,
-    paddingVertical: 12,
-    maxHeight: '80%',
-  },
-  modalTitle: {
-    fontSize: 15,
-    fontWeight: '600',
-    paddingHorizontal: 16,
-    paddingBottom: 8,
-  },
-  modalLoading: { padding: 32, alignItems: 'center' },
-  modalErr: { color: '#b91c1c', padding: 16, fontSize: 13 },
-  modalList: { paddingHorizontal: 8 },
-  pickRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingVertical: 11,
-  },
-  pickCheck: { fontSize: 18, marginRight: 10, color: '#2563eb' },
-  pickName: { fontSize: 15, color: '#222', flex: 1 },
-  modalBtns: {
-    flexDirection: 'row',
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#eee',
-    marginTop: 8,
-    paddingTop: 10,
-    paddingHorizontal: 16,
-  },
-  modalCancel: { flex: 1, paddingVertical: 10, alignItems: 'center' },
-  modalCancelText: { color: '#666', fontSize: 15 },
-  modalDone: {
-    flex: 1,
-    paddingVertical: 10,
-    alignItems: 'center',
-    backgroundColor: '#2563eb',
-    borderRadius: 10,
-  },
-  modalDoneText: { color: '#fff', fontSize: 15, fontWeight: '600' },
-});
+function createStyles(theme: ThemeColors) {
+  return StyleSheet.create({
+    flex: { flex: 1, backgroundColor: theme.background },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: theme.border,
+      backgroundColor: theme.surface,
+    },
+    headerTitle: { fontSize: 16, fontWeight: '600', color: theme.textPrimary },
+    headerBtn: { fontSize: 14, color: theme.primary },
+    content: { padding: 16, paddingBottom: 48 },
+    label: { fontSize: 14, fontWeight: '600', marginTop: 16, marginBottom: 6, color: theme.textPrimary },
+    hint: { fontSize: 12, color: theme.textTertiary, marginTop: 4, marginBottom: 6 },
+    input: {
+      borderWidth: 1,
+      borderColor: theme.border,
+      borderRadius: 10,
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      fontSize: 15,
+      color: theme.textPrimary,
+      backgroundColor: theme.inputBg,
+    },
+    segment: {
+      flexDirection: 'row',
+      borderWidth: 1,
+      borderColor: theme.border,
+      borderRadius: 10,
+      overflow: 'hidden',
+    },
+    segBtn: { flex: 1, paddingVertical: 10, alignItems: 'center' },
+    segBtnActive: { backgroundColor: theme.primary },
+    segText: { fontSize: 14, color: theme.textPrimary },
+    segTextActive: { color: '#fff', fontWeight: '600' },
+    fetchBtn: {
+      marginTop: 16,
+      borderWidth: 1,
+      borderColor: theme.primary,
+      borderRadius: 10,
+      paddingVertical: 12,
+      alignItems: 'center',
+    },
+    fetchText: { color: theme.primary, fontWeight: '600', fontSize: 15 },
+    modelRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: 10,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: theme.borderLight,
+    },
+    modelName: { fontSize: 15, color: theme.textPrimary, flex: 1, marginRight: 8 },
+    modelDel: { fontSize: 15 },
+    addRow: { flexDirection: 'row', alignItems: 'center', marginTop: 12 },
+    addInput: { flex: 1 },
+    addBtn: {
+      marginLeft: 8,
+      backgroundColor: theme.primary,
+      borderRadius: 10,
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+    },
+    addBtnDisabled: { backgroundColor: '#9db9f0', opacity: 0.6 },
+    addBtnText: { color: '#fff', fontWeight: '600' },
+    saveBtn: {
+      backgroundColor: theme.primary,
+      borderRadius: 10,
+      paddingVertical: 14,
+      alignItems: 'center',
+      marginTop: 28,
+    },
+    saveText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+    delBtn: {
+      borderWidth: 1,
+      borderColor: theme.danger,
+      borderRadius: 10,
+      paddingVertical: 12,
+      alignItems: 'center',
+      marginTop: 16,
+    },
+    delBtnText: { color: theme.danger, fontWeight: '600' },
+    modalBackdrop: {
+      flex: 1,
+      backgroundColor: theme.overlay,
+      justifyContent: 'center',
+      padding: 24,
+    },
+    modalSheet: {
+      backgroundColor: theme.background,
+      borderRadius: 14,
+      paddingVertical: 12,
+      maxHeight: '80%',
+    },
+    modalTitle: {
+      fontSize: 15,
+      fontWeight: '600',
+      paddingHorizontal: 16,
+      paddingBottom: 8,
+      color: theme.textPrimary,
+    },
+    modalLoading: { padding: 32, alignItems: 'center' },
+    modalErr: { color: theme.danger, padding: 16, fontSize: 13 },
+    modalList: { paddingHorizontal: 8 },
+    pickRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 8,
+      paddingVertical: 11,
+    },
+    pickCheck: { fontSize: 18, marginRight: 10, color: theme.primary },
+    pickName: { fontSize: 15, color: theme.textPrimary, flex: 1 },
+    modalBtns: {
+      flexDirection: 'row',
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: theme.borderLight,
+      marginTop: 8,
+      paddingTop: 10,
+      paddingHorizontal: 16,
+    },
+    modalCancel: { flex: 1, paddingVertical: 10, alignItems: 'center' },
+    modalCancelText: { color: theme.textSecondary, fontSize: 15 },
+    modalDone: {
+      flex: 1,
+      paddingVertical: 10,
+      alignItems: 'center',
+      backgroundColor: theme.primary,
+      borderRadius: 10,
+    },
+    modalDoneText: { color: '#fff', fontSize: 15, fontWeight: '600' },
+  });
+}

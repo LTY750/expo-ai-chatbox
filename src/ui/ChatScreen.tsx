@@ -1,6 +1,6 @@
 // 聊天界面 —— 消息列表 + 输入框 + 流式显示
 // 头部=当前对话名；输入框左侧=模型选择器（按服务商分组）
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -19,6 +19,7 @@ import {
 } from 'react-native';
 import { useChatStore, type PendingAttachment } from '../store';
 import type { Message } from '../types';
+import { useTheme, darkTheme, type ThemeColors } from '../theme';
 import Markdown from 'react-native-markdown-display';
 import { MathView } from './MathView';
 import { MermaidView } from './MermaidView';
@@ -33,6 +34,9 @@ export default function ChatScreen({
   onOpenDrawer: () => void;
   onOpenSettings: () => void;
 }) {
+  const theme = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
+
   const messages = useChatStore((s) => s.messages);
   const isStreaming = useChatStore((s) => s.isStreaming);
   const keyReady = useChatStore((s) => s.keyReady);
@@ -73,10 +77,22 @@ export default function ChatScreen({
     return () => { _onPreviewImage = null; };
   }, []);
   const listRef = useRef<FlatList<Message>>(null);
+  const nearBottomRef = useRef(true);
 
+  // 用户向上翻阅历史时，不强制滚到底部（仅当靠近底部时才自动滚动）
   useEffect(() => {
-    if (messages.length) listRef.current?.scrollToEnd({ animated: true });
+    if (messages.length && nearBottomRef.current) {
+      listRef.current?.scrollToEnd({ animated: true });
+    }
   }, [messages]);
+
+  // 错误消息 4 秒后自动消失
+  useEffect(() => {
+    if (err) {
+      const t = setTimeout(() => setErr(null), 4000);
+      return () => clearTimeout(t);
+    }
+  }, [err]);
 
   const parsing = pending.some((a) => a.status === 'parsing');
 
@@ -227,6 +243,12 @@ export default function ChatScreen({
         ListEmptyComponent={
           <Text style={styles.empty}>开始你的第一句对话吧</Text>
         }
+        onScroll={(e) => {
+          const { layoutMeasurement, contentOffset, contentSize } = e.nativeEvent;
+          const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
+          nearBottomRef.current = distanceFromBottom < 100;
+        }}
+        scrollEventThrottle={16}
       />
 
       {err && <Text style={styles.error}>{err}</Text>}
@@ -238,7 +260,7 @@ export default function ChatScreen({
               <Text style={styles.pendIcon}>{a.kind === 'image' ? '🖼' : '📄'}</Text>
               <Text style={styles.pendName} numberOfLines={1}>{a.name}</Text>
               {a.status === 'parsing' ? (
-                <ActivityIndicator size="small" style={styles.pendSpin} />
+                <ActivityIndicator size="small" style={styles.pendSpin} color={theme.textSecondary} />
               ) : a.status === 'error' ? (
                 <Text style={styles.pendErr}>✗</Text>
               ) : (
@@ -265,7 +287,7 @@ export default function ChatScreen({
         </Pressable>
         {searching && (
           <View style={styles.searchingBar}>
-            <ActivityIndicator size="small" />
+            <ActivityIndicator size="small" color={theme.textSecondary} />
             <Text style={styles.searchingText}>正在搜索…</Text>
           </View>
         )}
@@ -291,7 +313,7 @@ export default function ChatScreen({
           value={input}
           onChangeText={setInput}
           placeholder="输入消息…"
-          placeholderTextColor="#999"
+          placeholderTextColor={theme.placeholder}
           multiline
           editable={!isStreaming}
         />
@@ -425,6 +447,7 @@ export default function ChatScreen({
               onChangeText={setEditText}
               multiline
               autoFocus
+              placeholderTextColor={theme.placeholder}
             />
             <View style={styles.editBtns}>
               <Pressable style={styles.editCancel} onPress={() => setEditMsg(null)}>
@@ -471,6 +494,11 @@ function MessageBubble({
   msg: Message;
   onLongPress: () => void;
 }) {
+  const theme = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
+  const mdStyles = useMemo(() => createMdStyles(theme), [theme]);
+  const mdRules = useMemo(() => createMdRules(theme), [theme]);
+
   const isUser = msg.role === 'user';
   const streaming = msg.status === 'streaming';
   return (
@@ -498,7 +526,7 @@ function MessageBubble({
             </Markdown>
           )
         ) : streaming ? (
-          <ActivityIndicator size="small" />
+          <ActivityIndicator size="small" color={theme.textSecondary} />
         ) : null}
         {msg.status === 'error' && (
           <Text style={styles.bubbleErr}>⚠ {msg.error}</Text>
@@ -513,6 +541,9 @@ const COLLAPSE_LINES = 12; // 超过这么多行才折叠
 const PREVIEW_LINES = 8; // 折叠时预览行数
 
 function CodeBlock({ code, lang }: { code: string; lang?: string }) {
+  const theme = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
+
   const lines = code.replace(/\n$/, '').split('\n');
   const collapsible = lines.length > COLLAPSE_LINES;
   const [expanded, setExpanded] = useState(false);
@@ -583,404 +614,414 @@ function MarkdownImage({ src }: { src?: string }) {
   );
 }
 
-// 覆盖渲染规则：
-// - fence：math 语言走 MathView（块级公式），其它走可折叠代码块
+// 覆盖渲染规则（根据主题动态生成）：
+// - fence：math 语言走 MathView（块级公式），mermaid 走 MermaidView，其它走可折叠代码块
 // - code_block：可折叠代码块
 // - code_inline：m: 前缀走行内 MathView，其它正常
 // - link：点击用系统浏览器打开
 // - image：显示图片，点击查看大图
-const mdRules = {
-  fence: (node: any) => {
-    const lang = node.sourceInfo?.trim();
-    if (lang === 'math') {
-      return <MathView key={node.key} tex={node.content} display color="#111" />;
-    }
-    if (lang === 'mermaid') {
-      return <MermaidView key={node.key} code={node.content} color="#111" />;
-    }
-    return <CodeBlock key={node.key} code={node.content} lang={lang} />;
-  },
-  code_block: (node: any) => <CodeBlock key={node.key} code={node.content} />,
-  code_inline: (node: any) => {
-    const c: string = node.content ?? '';
-    if (c.startsWith('m:')) {
-      return <MathView key={node.key} tex={c.slice(2)} color="#111" />;
-    }
-    return null; // 返回 null 让默认样式生效
-  },
-  link: (node: any, _children: any) => {
-    const href = node.attributes?.href;
-    if (!href) return null;
-    return (
-      <Text
-        key={node.key}
-        style={{ color: '#2563eb', textDecorationLine: 'underline' }}
-        onPress={() => {
-          Linking.openURL(href).catch(() => {});
-        }}
-      >
-        {node.attributes?.title || href}
-      </Text>
-    );
-  },
-  image: (node: any) => (
-    <MarkdownImage key={node.key} src={node.attributes?.src} />
-  ),
-};
+function createMdRules(theme: ThemeColors) {
+  return {
+    fence: (node: any) => {
+      const lang = node.sourceInfo?.trim();
+      if (lang === 'math') {
+        return <MathView key={node.key} tex={node.content} display color={theme.textPrimary} />;
+      }
+      if (lang === 'mermaid') {
+        return <MermaidView key={node.key} code={node.content} color={theme.textPrimary} isDark={theme === darkTheme} />;
+      }
+      return <CodeBlock key={node.key} code={node.content} lang={lang} />;
+    },
+    code_block: (node: any) => <CodeBlock key={node.key} code={node.content} />,
+    code_inline: (node: any) => {
+      const c: string = node.content ?? '';
+      if (c.startsWith('m:')) {
+        return <MathView key={node.key} tex={c.slice(2)} color={theme.textPrimary} />;
+      }
+      return null; // 返回 null 让默认样式生效
+    },
+    link: (node: any, _children: any) => {
+      const href = node.attributes?.href;
+      if (!href) return null;
+      return (
+        <Text
+          key={node.key}
+          style={{ color: theme.primary, textDecorationLine: 'underline' }}
+          onPress={() => {
+            Linking.openURL(href).catch(() => {});
+          }}
+        >
+          {node.attributes?.title || href}
+        </Text>
+      );
+    },
+    image: (node: any) => (
+      <MarkdownImage key={node.key} src={node.attributes?.src} />
+    ),
+  };
+}
 
-// Markdown 渲染样式（AI 气泡浅灰底、深色字）
-const mdStyles = StyleSheet.create({
-  body: { fontSize: 15, lineHeight: 22, color: '#111' },
-  paragraph: { marginTop: 0, marginBottom: 8 },
-  heading1: { fontSize: 20, fontWeight: '700', marginTop: 6, marginBottom: 6 },
-  heading2: { fontSize: 18, fontWeight: '700', marginTop: 6, marginBottom: 6 },
-  heading3: { fontSize: 16, fontWeight: '700', marginTop: 4, marginBottom: 4 },
-  strong: { fontWeight: '700' },
-  em: { fontStyle: 'italic' },
-  bullet_list: { marginBottom: 4 },
-  ordered_list: { marginBottom: 4 },
-  list_item: { marginBottom: 2 },
-  code_inline: {
-    backgroundColor: '#e3e3e3',
-    color: '#c7254e',
-    paddingHorizontal: 4,
-    paddingVertical: 1,
-    borderRadius: 4,
-    fontFamily: RNPlatform.OS === 'ios' ? 'Menlo' : 'monospace',
-    fontSize: 13.5,
-  },
-  code_block: {
-    backgroundColor: '#282c34',
-    color: '#e6e6e6',
-    padding: 12,
-    borderRadius: 8,
-    fontFamily: RNPlatform.OS === 'ios' ? 'Menlo' : 'monospace',
-    fontSize: 13,
-  },
-  fence: {
-    backgroundColor: '#282c34',
-    color: '#e6e6e6',
-    padding: 12,
-    borderRadius: 8,
-    fontFamily: RNPlatform.OS === 'ios' ? 'Menlo' : 'monospace',
-    fontSize: 13,
-  },
-  blockquote: {
-    backgroundColor: '#eef2ff',
-    borderLeftWidth: 4,
-    borderLeftColor: '#2563eb',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    marginVertical: 4,
-  },
-  link: { color: '#2563eb' },
-  table: { borderWidth: 1, borderColor: '#ddd', borderRadius: 4 },
-  th: { padding: 6, fontWeight: '700' },
-  td: { padding: 6 },
-  hr: { backgroundColor: '#ddd', height: 1, marginVertical: 8 },
-});
-const styles = StyleSheet.create({
-  flex: { flex: 1 },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#ddd',
-    backgroundColor: '#fafafa',
-  },
-  headerSide: { width: 32 },
-  menuIcon: { fontSize: 22, color: '#111' },
-  headerTitle: {
-    flex: 1,
-    textAlign: 'center',
-    fontSize: 16,
-    fontWeight: '600',
-    marginHorizontal: 8,
-  },
-  banner: { backgroundColor: '#fef3c7', padding: 10 },
-  bannerText: { color: '#92400e', textAlign: 'center' },
-  listContent: { padding: 12, flexGrow: 1 },
-  empty: { textAlign: 'center', color: '#999', marginTop: 40 },
-  bubbleRow: { marginVertical: 4, flexDirection: 'row' },
-  rowLeft: { justifyContent: 'flex-start' },
-  rowRight: { justifyContent: 'flex-end' },
-  bubble: { maxWidth: '82%', borderRadius: 14, paddingHorizontal: 12, paddingVertical: 8 },
-  userBubble: { backgroundColor: '#2563eb' },
-  aiBubble: { backgroundColor: '#f1f1f1' },
-  bubbleText: { fontSize: 15, lineHeight: 21, color: '#111' },
-  userText: { color: '#fff' },
-  bubbleErr: { color: '#b91c1c', fontSize: 12, marginTop: 4 },
-  codeWrap: {
-    backgroundColor: '#282c34',
-    borderRadius: 8,
-    marginVertical: 4,
-    overflow: 'hidden',
-  },
-  codeHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingTop: 8,
-    paddingBottom: 4,
-  },
-  codeLang: { color: '#9aa4b2', fontSize: 11, fontWeight: '600' },
-  codeLineCount: { color: '#6b7280', fontSize: 11 },
-  codeCopy: { color: '#7aa2f7', fontSize: 12, fontWeight: '600' },
-  codeText: {
-    color: '#e6e6e6',
-    fontFamily: RNPlatform.OS === 'ios' ? 'Menlo' : 'monospace',
-    fontSize: 13,
-    lineHeight: 19,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  codeToggle: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#3a3f4b',
-    paddingVertical: 8,
-    alignItems: 'center',
-  },
-  codeToggleText: { color: '#7aa2f7', fontSize: 13, fontWeight: '600' },
-  error: { color: '#b91c1c', paddingHorizontal: 16, paddingVertical: 4 },
-  attCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.18)',
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    marginBottom: 6,
-  },
-  attIcon: { fontSize: 15, marginRight: 6 },
-  attName: { flex: 1, color: '#fff', fontSize: 13 },
-  attMeta: { color: 'rgba(255,255,255,0.75)', fontSize: 11, marginLeft: 6 },
-  pendingBar: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    paddingHorizontal: 8,
-    paddingTop: 6,
-  },
-  pendChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#eef2ff',
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    marginRight: 6,
-    marginBottom: 6,
-    maxWidth: 220,
-  },
-  pendIcon: { fontSize: 13, marginRight: 4 },
-  pendName: { fontSize: 12, color: '#333', flexShrink: 1 },
-  pendSpin: { marginLeft: 4, transform: [{ scale: 0.7 }] },
-  pendOk: { color: '#16a34a', fontSize: 12, marginLeft: 4 },
-  pendErr: { color: '#dc2626', fontSize: 12, marginLeft: 4 },
-  pendClose: { color: '#888', fontSize: 12, marginLeft: 8 },
-  attachBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 4,
-  },
-  attachIcon: { fontSize: 20 },
-  menuBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.35)',
-    justifyContent: 'flex-end',
-  },
-  menuSheet: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    paddingVertical: 8,
-    paddingBottom: 28,
-  },
-  menuItem: { paddingVertical: 15, paddingHorizontal: 22 },
-  menuText: { fontSize: 16, color: '#222' },
-  menuDanger: { color: '#dc2626' },
-  editBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'center',
-    padding: 24,
-  },
-  editSheet: { backgroundColor: '#fff', borderRadius: 14, padding: 16 },
-  editTitle: { fontSize: 15, fontWeight: '600', marginBottom: 10 },
-  editInput: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 15,
-    minHeight: 80,
-    maxHeight: 240,
-    textAlignVertical: 'top',
-  },
-  editBtns: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 14 },
-  editCancel: { paddingHorizontal: 16, paddingVertical: 8, marginRight: 8 },
-  editCancelText: { color: '#666', fontSize: 15 },
-  editOk: {
-    backgroundColor: '#2563eb',
-    borderRadius: 8,
-    paddingHorizontal: 18,
-    paddingVertical: 8,
-  },
-  editOkText: { color: '#fff', fontSize: 15, fontWeight: '600' },
-  toolBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    backgroundColor: '#fafafa',
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#eee',
-  },
-  webBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#ddd',
-    backgroundColor: '#fff',
-  },
-  webBtnActive: {
-    borderColor: '#2563eb',
-    backgroundColor: '#eef2ff',
-  },
-  webBtnDisabled: {
-    opacity: 0.5,
-  },
-  webIcon: { fontSize: 13, marginRight: 4 },
-  webText: { fontSize: 12, color: '#666' },
-  webTextActive: { color: '#2563eb', fontWeight: '600' },
-  searchingBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginLeft: 12,
-  },
-  searchingText: { fontSize: 12, color: '#888', marginLeft: 6 },
-  webWarn: { backgroundColor: '#fef3c7', paddingHorizontal: 12, paddingVertical: 6 },
-  webWarnText: { color: '#92400e', textAlign: 'center', fontSize: 12 },
-  inputRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    padding: 8,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#ddd',
-    backgroundColor: '#fff',
-  },
-  modelBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    maxWidth: 110,
-    height: 40,
-    paddingHorizontal: 10,
-    marginRight: 6,
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 20,
-    backgroundColor: '#f7f7f7',
-  },
-  modelBtnText: { fontSize: 12, color: '#444', flexShrink: 1 },
-  modelBtnCaret: { fontSize: 10, color: '#888', marginLeft: 2 },
-  input: {
-    flex: 1,
-    maxHeight: 120,
-    minHeight: 40,
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 20,
-    paddingHorizontal: 14,
-    paddingTop: 10,
-    paddingBottom: 10,
-    fontSize: 15,
-  },
-  sendBtn: {
-    marginLeft: 8,
-    backgroundColor: '#2563eb',
-    borderRadius: 20,
-    paddingHorizontal: 18,
-    height: 40,
-    justifyContent: 'center',
-  },
-  sendBtnDisabled: { backgroundColor: '#9db9f0' },
-  stopBtn: { backgroundColor: '#dc2626' },
-  sendText: { color: '#fff', fontWeight: '600' },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'center',
-    padding: 24,
-  },
-  modalSheet: {
-    backgroundColor: '#fff',
-    borderRadius: 14,
-    paddingVertical: 8,
-    maxHeight: '70%',
-  },
-  modalTitle: {
-    fontSize: 13,
-    color: '#999',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
-  modalList: { paddingHorizontal: 4 },
-  groupLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#666',
-    paddingHorizontal: 12,
-    paddingTop: 10,
-    paddingBottom: 2,
-  },
-  groupEmpty: { fontSize: 12, color: '#bbb', paddingHorizontal: 12, paddingBottom: 4 },
-  modelRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 11,
-    paddingHorizontal: 12,
-  },
-  modelName: { fontSize: 15, color: '#111', flex: 1 },
-  modelNameActive: { color: '#2563eb', fontWeight: '600' },
-  modelCheck: { fontSize: 16, color: '#2563eb', marginLeft: 8 },
-  modelManage: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#eee',
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  modelManageText: { fontSize: 14, color: '#2563eb' },
-  // 图片大图预览
-  previewOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.92)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  previewClose: {
-    position: 'absolute',
-    top: 40,
-    right: 20,
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 2,
-  },
-  previewCloseText: { color: '#fff', fontSize: 20 },
-  previewImage: { width: '100%', height: '80%' },
-});
+// Markdown 渲染样式（AI 气泡底色 + 主题化文字/代码/引用颜色）
+function createMdStyles(theme: ThemeColors) {
+  return StyleSheet.create({
+    body: { fontSize: 15, lineHeight: 22, color: theme.aiBubbleText },
+    paragraph: { marginTop: 0, marginBottom: 8 },
+    heading1: { fontSize: 20, fontWeight: '700', marginTop: 6, marginBottom: 6 },
+    heading2: { fontSize: 18, fontWeight: '700', marginTop: 6, marginBottom: 6 },
+    heading3: { fontSize: 16, fontWeight: '700', marginTop: 4, marginBottom: 4 },
+    strong: { fontWeight: '700' },
+    em: { fontStyle: 'italic' },
+    bullet_list: { marginBottom: 4 },
+    ordered_list: { marginBottom: 4 },
+    list_item: { marginBottom: 2 },
+    code_inline: {
+      backgroundColor: theme.codeInlineBg,
+      color: theme.codeInlineText,
+      paddingHorizontal: 4,
+      paddingVertical: 1,
+      borderRadius: 4,
+      fontFamily: RNPlatform.OS === 'ios' ? 'Menlo' : 'monospace',
+      fontSize: 13.5,
+    },
+    code_block: {
+      backgroundColor: theme.codeBg,
+      color: theme.codeText,
+      padding: 12,
+      borderRadius: 8,
+      fontFamily: RNPlatform.OS === 'ios' ? 'Menlo' : 'monospace',
+      fontSize: 13,
+    },
+    fence: {
+      backgroundColor: theme.codeBg,
+      color: theme.codeText,
+      padding: 12,
+      borderRadius: 8,
+      fontFamily: RNPlatform.OS === 'ios' ? 'Menlo' : 'monospace',
+      fontSize: 13,
+    },
+    blockquote: {
+      backgroundColor: theme.blockquoteBg,
+      borderLeftWidth: 4,
+      borderLeftColor: theme.primary,
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+      marginVertical: 4,
+    },
+    link: { color: theme.primary },
+    table: { borderWidth: 1, borderColor: theme.border, borderRadius: 4 },
+    th: { padding: 6, fontWeight: '700', color: theme.aiBubbleText },
+    td: { padding: 6, color: theme.aiBubbleText },
+    hr: { backgroundColor: theme.border, height: 1, marginVertical: 8 },
+  });
+}
 
+// 主样式（根据主题动态生成）
+function createStyles(theme: ThemeColors) {
+  return StyleSheet.create({
+    flex: { flex: 1 },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: theme.border,
+      backgroundColor: theme.surface,
+    },
+    headerSide: { width: 32 },
+    menuIcon: { fontSize: 22, color: theme.textPrimary },
+    headerTitle: {
+      flex: 1,
+      textAlign: 'center',
+      fontSize: 16,
+      fontWeight: '600',
+      marginHorizontal: 8,
+      color: theme.textPrimary,
+    },
+    banner: { backgroundColor: theme.bannerBg, padding: 10 },
+    bannerText: { color: theme.bannerText, textAlign: 'center' },
+    listContent: { padding: 12, flexGrow: 1 },
+    empty: { textAlign: 'center', color: theme.textTertiary, marginTop: 40 },
+    bubbleRow: { marginVertical: 4, flexDirection: 'row' },
+    rowLeft: { justifyContent: 'flex-start' },
+    rowRight: { justifyContent: 'flex-end' },
+    bubble: { maxWidth: '82%', borderRadius: 14, paddingHorizontal: 12, paddingVertical: 8 },
+    userBubble: { backgroundColor: theme.userBubble },
+    aiBubble: { backgroundColor: theme.aiBubble },
+    bubbleText: { fontSize: 15, lineHeight: 21, color: theme.aiBubbleText },
+    userText: { color: theme.userBubbleText },
+    bubbleErr: { color: theme.danger, fontSize: 12, marginTop: 4 },
+    codeWrap: {
+      backgroundColor: theme.codeBg,
+      borderRadius: 8,
+      marginVertical: 4,
+      overflow: 'hidden',
+    },
+    codeHeader: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingHorizontal: 12,
+      paddingTop: 8,
+      paddingBottom: 4,
+    },
+    codeLang: { color: '#9aa4b2', fontSize: 11, fontWeight: '600' },
+    codeCopy: { color: '#7aa2f7', fontSize: 12, fontWeight: '600' },
+    codeText: {
+      color: theme.codeText,
+      fontFamily: RNPlatform.OS === 'ios' ? 'Menlo' : 'monospace',
+      fontSize: 13,
+      lineHeight: 19,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+    },
+    codeToggle: {
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: '#3a3f4b',
+      paddingVertical: 8,
+      alignItems: 'center',
+    },
+    codeToggleText: { color: '#7aa2f7', fontSize: 13, fontWeight: '600' },
+    error: { color: theme.danger, paddingHorizontal: 16, paddingVertical: 4 },
+    attCard: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: 'rgba(255,255,255,0.18)',
+      borderRadius: 8,
+      paddingHorizontal: 8,
+      paddingVertical: 6,
+      marginBottom: 6,
+    },
+    attIcon: { fontSize: 15, marginRight: 6 },
+    attName: { flex: 1, color: '#fff', fontSize: 13 },
+    attMeta: { color: 'rgba(255,255,255,0.75)', fontSize: 11, marginLeft: 6 },
+    pendingBar: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      paddingHorizontal: 8,
+      paddingTop: 6,
+    },
+    pendChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: theme.primaryLight,
+      borderRadius: 8,
+      paddingHorizontal: 8,
+      paddingVertical: 5,
+      marginRight: 6,
+      marginBottom: 6,
+      maxWidth: 220,
+    },
+    pendIcon: { fontSize: 13, marginRight: 4 },
+    pendName: { fontSize: 12, color: theme.textPrimary, flexShrink: 1 },
+    pendSpin: { marginLeft: 4, transform: [{ scale: 0.7 }] },
+    pendOk: { color: '#16a34a', fontSize: 12, marginLeft: 4 },
+    pendErr: { color: theme.danger, fontSize: 12, marginLeft: 4 },
+    pendClose: { color: theme.textSecondary, fontSize: 12, marginLeft: 8 },
+    attachBtn: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: 4,
+    },
+    attachIcon: { fontSize: 20 },
+    menuBackdrop: {
+      flex: 1,
+      backgroundColor: theme.overlay,
+      justifyContent: 'flex-end',
+    },
+    menuSheet: {
+      backgroundColor: theme.background,
+      borderTopLeftRadius: 16,
+      borderTopRightRadius: 16,
+      paddingVertical: 8,
+      paddingBottom: 28,
+    },
+    menuItem: { paddingVertical: 15, paddingHorizontal: 22 },
+    menuText: { fontSize: 16, color: theme.textPrimary },
+    menuDanger: { color: theme.danger },
+    editBackdrop: {
+      flex: 1,
+      backgroundColor: theme.overlay,
+      justifyContent: 'center',
+      padding: 24,
+    },
+    editSheet: { backgroundColor: theme.background, borderRadius: 14, padding: 16 },
+    editTitle: { fontSize: 15, fontWeight: '600', marginBottom: 10, color: theme.textPrimary },
+    editInput: {
+      borderWidth: 1,
+      borderColor: theme.border,
+      borderRadius: 10,
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      fontSize: 15,
+      color: theme.textPrimary,
+      minHeight: 80,
+      maxHeight: 240,
+      textAlignVertical: 'top',
+    },
+    editBtns: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 14 },
+    editCancel: { paddingHorizontal: 16, paddingVertical: 8, marginRight: 8 },
+    editCancelText: { color: theme.textSecondary, fontSize: 15 },
+    editOk: {
+      backgroundColor: theme.primary,
+      borderRadius: 8,
+      paddingHorizontal: 18,
+      paddingVertical: 8,
+    },
+    editOkText: { color: '#fff', fontSize: 15, fontWeight: '600' },
+    toolBar: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      backgroundColor: theme.surface,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: theme.borderLight,
+    },
+    webBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 10,
+      paddingVertical: 5,
+      borderRadius: 16,
+      borderWidth: 1,
+      borderColor: theme.border,
+      backgroundColor: theme.background,
+    },
+    webBtnActive: {
+      borderColor: theme.primary,
+      backgroundColor: theme.primaryLight,
+    },
+    webBtnDisabled: {
+      opacity: 0.5,
+    },
+    webIcon: { fontSize: 13, marginRight: 4 },
+    webText: { fontSize: 12, color: theme.textSecondary },
+    webTextActive: { color: theme.primary, fontWeight: '600' },
+    searchingBar: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginLeft: 12,
+    },
+    searchingText: { fontSize: 12, color: theme.textSecondary, marginLeft: 6 },
+    webWarn: { backgroundColor: theme.bannerBg, paddingHorizontal: 12, paddingVertical: 6 },
+    webWarnText: { color: theme.bannerText, textAlign: 'center', fontSize: 12 },
+    inputRow: {
+      flexDirection: 'row',
+      alignItems: 'flex-end',
+      padding: 8,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: theme.border,
+      backgroundColor: theme.background,
+    },
+    modelBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      maxWidth: 110,
+      height: 40,
+      paddingHorizontal: 10,
+      marginRight: 6,
+      borderWidth: 1,
+      borderColor: theme.border,
+      borderRadius: 20,
+      backgroundColor: theme.surfaceVariant,
+    },
+    modelBtnText: { fontSize: 12, color: theme.textPrimary, flexShrink: 1 },
+    modelBtnCaret: { fontSize: 10, color: theme.textSecondary, marginLeft: 2 },
+    input: {
+      flex: 1,
+      maxHeight: 120,
+      minHeight: 40,
+      borderWidth: 1,
+      borderColor: theme.border,
+      borderRadius: 20,
+      paddingHorizontal: 14,
+      paddingTop: 10,
+      paddingBottom: 10,
+      fontSize: 15,
+      color: theme.textPrimary,
+      backgroundColor: theme.inputBg,
+    },
+    sendBtn: {
+      marginLeft: 8,
+      backgroundColor: theme.primary,
+      borderRadius: 20,
+      paddingHorizontal: 18,
+      height: 40,
+      justifyContent: 'center',
+    },
+    sendBtnDisabled: { backgroundColor: '#9db9f0' },
+    stopBtn: { backgroundColor: theme.danger },
+    sendText: { color: '#fff', fontWeight: '600' },
+    modalBackdrop: {
+      flex: 1,
+      backgroundColor: theme.overlay,
+      justifyContent: 'center',
+      padding: 24,
+    },
+    modalSheet: {
+      backgroundColor: theme.background,
+      borderRadius: 14,
+      paddingVertical: 8,
+      maxHeight: '70%',
+    },
+    modalTitle: {
+      fontSize: 13,
+      color: theme.textTertiary,
+      paddingHorizontal: 16,
+      paddingVertical: 8,
+    },
+    modalList: { paddingHorizontal: 4 },
+    groupLabel: {
+      fontSize: 12,
+      fontWeight: '600',
+      color: theme.textSecondary,
+      paddingHorizontal: 12,
+      paddingTop: 10,
+      paddingBottom: 2,
+    },
+    groupEmpty: { fontSize: 12, color: theme.textTertiary, paddingHorizontal: 12, paddingBottom: 4 },
+    modelRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: 11,
+      paddingHorizontal: 12,
+    },
+    modelName: { fontSize: 15, color: theme.textPrimary, flex: 1 },
+    modelNameActive: { color: theme.primary, fontWeight: '600' },
+    modelCheck: { fontSize: 16, color: theme.primary, marginLeft: 8 },
+    modelManage: {
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: theme.borderLight,
+      paddingVertical: 12,
+      alignItems: 'center',
+    },
+    modelManageText: { fontSize: 14, color: theme.primary },
+    // 图片大图预览
+    previewOverlay: {
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.92)',
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    previewClose: {
+      position: 'absolute',
+      top: 40,
+      right: 20,
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: 'rgba(255,255,255,0.2)',
+      justifyContent: 'center',
+      alignItems: 'center',
+      zIndex: 2,
+    },
+    previewCloseText: { color: '#fff', fontSize: 20 },
+    previewImage: { width: '100%', height: '80%' },
+  });
+}

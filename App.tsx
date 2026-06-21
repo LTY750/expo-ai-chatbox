@@ -4,6 +4,7 @@ import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { useChatStore } from './src/store';
+import { useTheme, useIsDark } from './src/theme';
 import ChatScreen from './src/ui/ChatScreen';
 import SettingsScreen from './src/ui/SettingsScreen';
 import Drawer from './src/ui/Drawer';
@@ -11,6 +12,8 @@ import Drawer from './src/ui/Drawer';
 export default function App() {
   const init = useChatStore((s) => s.init);
   const initialized = useChatStore((s) => s.initialized);
+  const theme = useTheme();
+  const isDark = useIsDark();
   const [showSettings, setShowSettings] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
@@ -20,11 +23,11 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <SafeAreaView style={styles.safe}>
-        <StatusBar style="dark" />
+      <SafeAreaView style={[styles.safe, { backgroundColor: theme.background }]}>
+        <StatusBar style={isDark ? 'light' : 'dark'} />
         {!initialized ? (
-          <View style={styles.center}>
-            <ActivityIndicator size="large" />
+          <View style={[styles.center, { backgroundColor: theme.background }]}>
+            <ActivityIndicator size="large" color={theme.primary} />
           </View>
         ) : showSettings ? (
           <SettingsScreen onClose={() => setShowSettings(false)} />
@@ -49,7 +52,6 @@ export default function App() {
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: '#fff',
   },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 });

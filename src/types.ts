@@ -1,5 +1,7 @@
 // 核心数据模型 —— 借鉴 Chatbox 的 Session / Message 设计
 
+import type { ThemeMode } from './theme';
+
 export type Role = 'system' | 'user' | 'assistant';
 
 // 消息附件（文档/图片解析后的元信息；解析出的文本拼进 content 发给模型）
@@ -65,4 +67,6 @@ export interface AppSettings {
   systemPrompt: string;
   // 文档解析 OCR（独立配置；key 存 SecureStore，id 固定 'ocr'）
   ocr: { baseURL: string; model: string };
+  // 主题模式
+  theme: ThemeMode;
 }

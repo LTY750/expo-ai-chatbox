@@ -50,6 +50,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   maxTokens: 4096,
   systemPrompt: '',
   ocr: { baseURL: SILICONFLOW_BASE_URL, model: 'deepseek-ai/DeepSeek-OCR' },
+  theme: 'system',
 };
 
 const DEFAULT_OCR = { baseURL: SILICONFLOW_BASE_URL, model: 'deepseek-ai/DeepSeek-OCR' };
@@ -99,6 +100,7 @@ function normalizeSettings(s: any): AppSettings {
     maxTokens: s.maxTokens ?? 4096,
     systemPrompt: s.systemPrompt ?? '',
     ocr: s.ocr?.baseURL ? s.ocr : DEFAULT_OCR,
+    theme: s.theme ?? 'system',
   };
 }
 

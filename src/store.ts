@@ -3,6 +3,7 @@
 
 import { create } from 'zustand';
 import type { AppSettings, Attachment, Message, ModelSettings, Provider, Session } from './types';
+import type { ThemeMode } from './theme';
 import * as db from './db';
 import {
   DEFAULT_SETTINGS,
@@ -183,6 +184,10 @@ interface ChatState {
   // LlamaParse 文档解析
   llamaparseReady: boolean; // 是否已配置 LlamaParse key
 
+  // 主题
+  themeMode: ThemeMode;
+  setTheme: (mode: ThemeMode) => Promise<void>;
+
   init: () => Promise<void>;
 
   // 设置 / 服务商
@@ -240,6 +245,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   webSearchEnabled: false,
   tavilyReady: false,
   llamaparseReady: false,
+  themeMode: 'system',
 
   async init() {
     const [settings, sessions] = await Promise.all([
@@ -252,6 +258,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const llamaParseKey = await getLlamaParseKey();
     set({
       settings,
+      themeMode: settings.theme,
       sessions,
       keyReady: !!key,
       tavilyReady: !!tavilyKey,
@@ -266,6 +273,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const next = { ...get().settings, ...patch };
     await saveSettings(next);
     set({ settings: next });
+  },
+
+  async setTheme(mode) {
+    const next = { ...get().settings, theme: mode };
+    await saveSettings(next);
+    set({ settings: next, themeMode: mode });
   },
 
   async addProvider(p) {
@@ -556,8 +569,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   stopStreaming() {
-    get().abortController?.abort();
-    set({ isStreaming: false, searching: false, abortController: null });
+    const controller = get().abortController;
+    if (!controller) return;
+
+    // abort 前先保存当前 streaming 消息（防止 onDone 因 isMine 失败而跳过 DB 写入）
+    const messages = get().messages;
+    const streamingMsg = messages.find((m) => m.status === 'streaming');
+    if (streamingMsg) {
+      db.updateMessage(streamingMsg.id, { content: streamingMsg.content, status: 'done' }).catch(() => {});
+    }
+
+    controller.abort();
+    set((s) => ({
+      isStreaming: false,
+      searching: false,
+      abortController: null,
+      messages: s.messages.map((m) =>
+        m.status === 'streaming' ? { ...m, status: 'done' } : m
+      ),
+    }));
   },
 
   // 删除单条消息

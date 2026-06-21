@@ -6,9 +6,10 @@ import { WebView } from 'react-native-webview';
 interface MermaidViewProps {
   code: string; // mermaid 源码
   color?: string; // 文字颜色，默认黑
+  isDark?: boolean; // 是否深色模式，决定 mermaid 内部 SVG 主题
 }
 
-export function MermaidView({ code, color = '#111' }: MermaidViewProps) {
+export function MermaidView({ code, color = '#111', isDark = false }: MermaidViewProps) {
   const html = useMemo(() => {
     const escaped = code
       .replace(/&/g, '&amp;')
@@ -31,7 +32,7 @@ export function MermaidView({ code, color = '#111' }: MermaidViewProps) {
 <script>
   (async () => {
     try {
-      mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'loose' });
+      mermaid.initialize({ startOnLoad: false, theme: isDark ? 'dark' : 'default', securityLevel: 'loose' });
       const { svg } = await mermaid.render('m', ${JSON.stringify(escaped)});
       document.getElementById('out').innerHTML = svg;
       // 通知 RN 高度
@@ -47,7 +48,7 @@ export function MermaidView({ code, color = '#111' }: MermaidViewProps) {
 </script>
 </body>
 </html>`;
-  }, [code, color]);
+  }, [code, color, isDark]);
 
   return (
     <WebView

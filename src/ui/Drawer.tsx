@@ -1,7 +1,8 @@
 // 侧边栏抽屉 —— 自研滑动抽屉（Animated + 遮罩），不引第三方库
 // 内含：＋新对话 / 会话列表（点选 + 删除）/ 设置入口
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   Animated,
   Dimensions,
   FlatList,
@@ -14,6 +15,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useChatStore } from '../store';
+import { useTheme, type ThemeColors } from '../theme';
 import type { Session } from '../types';
 
 const SCREEN_W = Dimensions.get('window').width;
@@ -28,6 +30,8 @@ export default function Drawer({
   onClose: () => void;
   onOpenSettings: () => void;
 }) {
+  const theme = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
   const insets = useSafeAreaInsets();
   const sessions = useChatStore((s) => s.sessions);
   const currentSessionId = useChatStore((s) => s.currentSessionId);
@@ -146,7 +150,7 @@ export default function Drawer({
               onChangeText={setEditText}
               autoFocus
               placeholder="输入新名称"
-              placeholderTextColor="#999"
+              placeholderTextColor={theme.placeholder}
               onSubmitEditing={commitRename}
             />
             <View style={styles.renameBtns}>
@@ -177,6 +181,20 @@ function SessionRow({
   onDelete: () => void;
   onRename: () => void;
 }) {
+  const theme = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
+
+  function handleDelete() {
+    Alert.alert(
+      '删除对话',
+      `确定删除「${session.title}」吗？此操作不可恢复。`,
+      [
+        { text: '取消', style: 'cancel' },
+        { text: '删除', style: 'destructive', onPress: onDelete },
+      ]
+    );
+  }
+
   return (
     <Pressable
       style={[styles.row, active && styles.rowActive]}
@@ -191,96 +209,100 @@ function SessionRow({
       <Pressable onPress={onRename} hitSlop={10} style={styles.rowAction}>
         <Text style={styles.edit}>✏</Text>
       </Pressable>
-      <Pressable onPress={onDelete} hitSlop={10} style={styles.rowAction}>
+      <Pressable onPress={handleDelete} hitSlop={10} style={styles.rowAction}>
         <Text style={styles.del}>🗑</Text>
       </Pressable>
     </Pressable>
   );
 }
 
-const styles = StyleSheet.create({
-  flex: { flex: 1 },
-  backdrop: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-  },
-  drawer: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    backgroundColor: '#fff',
-    borderRightWidth: StyleSheet.hairlineWidth,
-    borderRightColor: '#ddd',
-    elevation: 16,
-  },
-  newBtn: {
-    margin: 12,
-    backgroundColor: '#2563eb',
-    borderRadius: 10,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  newBtnText: { color: '#fff', fontSize: 15, fontWeight: '600' },
-  sectionLabel: {
-    fontSize: 12,
-    color: '#999',
-    paddingHorizontal: 16,
-    paddingBottom: 6,
-  },
-  emptyHint: { color: '#bbb', textAlign: 'center', marginTop: 24, fontSize: 13 },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  rowActive: { backgroundColor: '#eef2ff' },
-  rowTitle: { flex: 1, fontSize: 15, color: '#333', marginRight: 8 },
-  rowTitleActive: { color: '#2563eb', fontWeight: '600' },
-  del: { fontSize: 15 },
-  rowAction: { flexDirection: 'row', alignItems: 'center' },
-  edit: { fontSize: 14, marginRight: 12 },
-  renameBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'center',
-    padding: 28,
-  },
-  renameSheet: { backgroundColor: '#fff', borderRadius: 14, padding: 18 },
-  renameTitle: { fontSize: 15, fontWeight: '600', marginBottom: 12 },
-  renameInput: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 15,
-  },
-  renameBtns: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    marginTop: 16,
-  },
-  renameCancel: { paddingHorizontal: 16, paddingVertical: 8, marginRight: 8 },
-  renameCancelText: { color: '#666', fontSize: 15 },
-  renameOk: {
-    backgroundColor: '#2563eb',
-    borderRadius: 8,
-    paddingHorizontal: 18,
-    paddingVertical: 8,
-  },
-  renameOkText: { color: '#fff', fontSize: 15, fontWeight: '600' },
-  footer: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#eee',
-    paddingTop: 14,
-    paddingHorizontal: 16,
-  },
-  footerText: { fontSize: 15, color: '#333' },
-});
+function createStyles(theme: ThemeColors) {
+  return StyleSheet.create({
+    flex: { flex: 1 },
+    backdrop: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      backgroundColor: theme.overlay,
+    },
+    drawer: {
+      position: 'absolute',
+      left: 0,
+      top: 0,
+      bottom: 0,
+      backgroundColor: theme.background,
+      borderRightWidth: StyleSheet.hairlineWidth,
+      borderRightColor: theme.border,
+      elevation: 16,
+    },
+    newBtn: {
+      margin: 12,
+      backgroundColor: theme.primary,
+      borderRadius: 10,
+      paddingVertical: 12,
+      alignItems: 'center',
+    },
+    newBtnText: { color: '#fff', fontSize: 15, fontWeight: '600' },
+    sectionLabel: {
+      fontSize: 12,
+      color: theme.textTertiary,
+      paddingHorizontal: 16,
+      paddingBottom: 6,
+    },
+    emptyHint: { color: theme.textTertiary, textAlign: 'center', marginTop: 24, fontSize: 13 },
+    row: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+    },
+    rowActive: { backgroundColor: theme.primaryLight },
+    rowTitle: { flex: 1, fontSize: 15, color: theme.textPrimary, marginRight: 8 },
+    rowTitleActive: { color: theme.primary, fontWeight: '600' },
+    del: { fontSize: 15 },
+    rowAction: { flexDirection: 'row', alignItems: 'center' },
+    edit: { fontSize: 14, marginRight: 12 },
+    renameBackdrop: {
+      flex: 1,
+      backgroundColor: theme.overlay,
+      justifyContent: 'center',
+      padding: 28,
+    },
+    renameSheet: { backgroundColor: theme.background, borderRadius: 14, padding: 18 },
+    renameTitle: { fontSize: 15, fontWeight: '600', marginBottom: 12, color: theme.textPrimary },
+    renameInput: {
+      borderWidth: 1,
+      borderColor: theme.border,
+      borderRadius: 10,
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      fontSize: 15,
+      color: theme.textPrimary,
+      backgroundColor: theme.inputBg,
+    },
+    renameBtns: {
+      flexDirection: 'row',
+      justifyContent: 'flex-end',
+      marginTop: 16,
+    },
+    renameCancel: { paddingHorizontal: 16, paddingVertical: 8, marginRight: 8 },
+    renameCancelText: { color: theme.textSecondary, fontSize: 15 },
+    renameOk: {
+      backgroundColor: theme.primary,
+      borderRadius: 8,
+      paddingHorizontal: 18,
+      paddingVertical: 8,
+    },
+    renameOkText: { color: '#fff', fontSize: 15, fontWeight: '600' },
+    footer: {
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: theme.borderLight,
+      paddingTop: 14,
+      paddingHorizontal: 16,
+    },
+    footerText: { fontSize: 15, color: theme.textPrimary },
+  });
+}

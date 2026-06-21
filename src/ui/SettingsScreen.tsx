@@ -1,5 +1,5 @@
-// 设置页（一级）—— 服务商列表 + 添加服务商 + 全局参数 + 文档解析(OCR)
-import { useEffect, useState } from 'react';
+// 设置页（一级）—— 外观主题 + 服务商列表 + 添加服务商 + 全局参数 + 文档解析(OCR)
+import { useEffect, useMemo, useState } from 'react';
 import {
   Pressable,
   ScrollView,
@@ -10,9 +10,19 @@ import {
 } from 'react-native';
 import { useChatStore } from '../store';
 import { getOcrKey, getTavilyKey, getLlamaParseKey } from '../settings';
+import { useTheme, type ThemeColors, type ThemeMode } from '../theme';
 import ProviderDetailScreen from './ProviderDetailScreen';
 
+const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
+  { value: 'system', label: '跟随系统' },
+  { value: 'light', label: '浅色' },
+  { value: 'dark', label: '深色' },
+];
+
 export default function SettingsScreen({ onClose }: { onClose: () => void }) {
+  const theme = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
+
   const providers = useChatStore((s) => s.settings.providers);
   const systemPrompt = useChatStore((s) => s.settings.systemPrompt);
   const ocr = useChatStore((s) => s.settings.ocr);
@@ -21,6 +31,8 @@ export default function SettingsScreen({ onClose }: { onClose: () => void }) {
   const saveOcrKey = useChatStore((s) => s.saveOcrKey);
   const saveTavilyKey = useChatStore((s) => s.saveTavilyKey);
   const saveLlamaParseKey = useChatStore((s) => s.saveLlamaParseKey);
+  const themeMode = useChatStore((s) => s.themeMode);
+  const setTheme = useChatStore((s) => s.setTheme);
 
   // null = 在列表页；'new' = 新增；其它 = 编辑某服务商
   const [editing, setEditing] = useState<string | null | 'new'>(null);
@@ -94,6 +106,22 @@ export default function SettingsScreen({ onClose }: { onClose: () => void }) {
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
+        {/* 外观主题切换 */}
+        <Text style={styles.section}>外观</Text>
+        <View style={styles.segment}>
+          {THEME_OPTIONS.map((opt) => (
+            <Pressable
+              key={opt.value}
+              style={[styles.segBtn, themeMode === opt.value && styles.segBtnActive]}
+              onPress={() => setTheme(opt.value)}
+            >
+              <Text style={[styles.segText, themeMode === opt.value && styles.segTextActive]}>
+                {opt.label}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+
         <Text style={styles.section}>API 服务商</Text>
         {providers.map((p) => (
           <Pressable key={p.id} style={styles.row} onPress={() => setEditing(p.id)}>
@@ -120,7 +148,7 @@ export default function SettingsScreen({ onClose }: { onClose: () => void }) {
           value={ocrURL}
           onChangeText={setOcrURL}
           placeholder="https://api.siliconflow.cn/v1"
-          placeholderTextColor="#999"
+          placeholderTextColor={theme.placeholder}
           autoCapitalize="none"
           autoCorrect={false}
         />
@@ -130,7 +158,7 @@ export default function SettingsScreen({ onClose }: { onClose: () => void }) {
           value={ocrModel}
           onChangeText={setOcrModel}
           placeholder="deepseek-ai/DeepSeek-OCR"
-          placeholderTextColor="#999"
+          placeholderTextColor={theme.placeholder}
           autoCapitalize="none"
           autoCorrect={false}
         />
@@ -140,7 +168,7 @@ export default function SettingsScreen({ onClose }: { onClose: () => void }) {
           value={ocrKey}
           onChangeText={setOcrKey}
           placeholder="sk-…（可复用硅基流动的 key）"
-          placeholderTextColor="#999"
+          placeholderTextColor={theme.placeholder}
           secureTextEntry
           autoCapitalize="none"
           autoCorrect={false}
@@ -159,7 +187,7 @@ export default function SettingsScreen({ onClose }: { onClose: () => void }) {
           value={tavilyKey}
           onChangeText={setTavilyKey}
           placeholder="tvly-…"
-          placeholderTextColor="#999"
+          placeholderTextColor={theme.placeholder}
           secureTextEntry
           autoCapitalize="none"
           autoCorrect={false}
@@ -178,7 +206,7 @@ export default function SettingsScreen({ onClose }: { onClose: () => void }) {
           value={llamaParseKey}
           onChangeText={setLlamaParseKey}
           placeholder="llx-…"
-          placeholderTextColor="#999"
+          placeholderTextColor={theme.placeholder}
           secureTextEntry
           autoCapitalize="none"
           autoCorrect={false}
@@ -193,7 +221,7 @@ export default function SettingsScreen({ onClose }: { onClose: () => void }) {
           value={sp}
           onChangeText={setSp}
           placeholder="例如：你是一个简洁的中文助手"
-          placeholderTextColor="#999"
+          placeholderTextColor={theme.placeholder}
           multiline
         />
         <Pressable style={styles.saveBtn} onPress={saveGlobal}>
@@ -204,62 +232,78 @@ export default function SettingsScreen({ onClose }: { onClose: () => void }) {
   );
 }
 
-const styles = StyleSheet.create({
-  flex: { flex: 1, backgroundColor: '#fff' },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#ddd',
-    backgroundColor: '#fafafa',
-  },
-  headerTitle: { fontSize: 16, fontWeight: '600' },
-  headerBtn: { fontSize: 14, color: '#2563eb' },
-  content: { padding: 16, paddingBottom: 48 },
-  section: { fontSize: 13, color: '#999', marginTop: 20, marginBottom: 8 },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 14,
-    borderWidth: 1,
-    borderColor: '#eee',
-    borderRadius: 10,
-    marginBottom: 8,
-  },
-  rowName: { fontSize: 15, fontWeight: '600', color: '#222' },
-  rowSub: { fontSize: 12, color: '#999', marginTop: 2 },
-  chev: { fontSize: 22, color: '#ccc', marginLeft: 8 },
-  addProvider: {
-    borderWidth: 1,
-    borderColor: '#2563eb',
-    borderStyle: 'dashed',
-    borderRadius: 10,
-    paddingVertical: 12,
-    alignItems: 'center',
-    marginTop: 4,
-  },
-  addProviderText: { color: '#2563eb', fontWeight: '600', fontSize: 15 },
-  ocrHint: { fontSize: 12, color: '#999', marginBottom: 8, lineHeight: 17 },
-  fieldLabel: { fontSize: 13, fontWeight: '600', marginTop: 12, marginBottom: 6, color: '#444' },
-  input: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 15,
-  },
-  multiline: { minHeight: 80, textAlignVertical: 'top' },
-  saveBtn: {
-    backgroundColor: '#2563eb',
-    borderRadius: 10,
-    paddingVertical: 14,
-    alignItems: 'center',
-    marginTop: 16,
-  },
-  saveText: { color: '#fff', fontSize: 16, fontWeight: '600' },
-});
+function createStyles(theme: ThemeColors) {
+  return StyleSheet.create({
+    flex: { flex: 1, backgroundColor: theme.background },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: theme.border,
+      backgroundColor: theme.surface,
+    },
+    headerTitle: { fontSize: 16, fontWeight: '600', color: theme.textPrimary },
+    headerBtn: { fontSize: 14, color: theme.primary },
+    content: { padding: 16, paddingBottom: 48 },
+    section: { fontSize: 13, color: theme.textTertiary, marginTop: 20, marginBottom: 8 },
+    // 主题切换分段控件
+    segment: {
+      flexDirection: 'row',
+      borderWidth: 1,
+      borderColor: theme.border,
+      borderRadius: 10,
+      overflow: 'hidden',
+    },
+    segBtn: { flex: 1, paddingVertical: 10, alignItems: 'center' },
+    segBtnActive: { backgroundColor: theme.primary },
+    segText: { fontSize: 14, color: theme.textPrimary },
+    segTextActive: { color: '#fff', fontWeight: '600' },
+    row: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: 14,
+      paddingHorizontal: 14,
+      borderWidth: 1,
+      borderColor: theme.borderLight,
+      borderRadius: 10,
+      marginBottom: 8,
+    },
+    rowName: { fontSize: 15, fontWeight: '600', color: theme.textPrimary },
+    rowSub: { fontSize: 12, color: theme.textTertiary, marginTop: 2 },
+    chev: { fontSize: 22, color: theme.textTertiary, marginLeft: 8 },
+    addProvider: {
+      borderWidth: 1,
+      borderColor: theme.primary,
+      borderStyle: 'dashed',
+      borderRadius: 10,
+      paddingVertical: 12,
+      alignItems: 'center',
+      marginTop: 4,
+    },
+    addProviderText: { color: theme.primary, fontWeight: '600', fontSize: 15 },
+    ocrHint: { fontSize: 12, color: theme.textTertiary, marginBottom: 8, lineHeight: 17 },
+    fieldLabel: { fontSize: 13, fontWeight: '600', marginTop: 12, marginBottom: 6, color: theme.textPrimary },
+    input: {
+      borderWidth: 1,
+      borderColor: theme.border,
+      borderRadius: 10,
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      fontSize: 15,
+      color: theme.textPrimary,
+      backgroundColor: theme.inputBg,
+    },
+    multiline: { minHeight: 80, textAlignVertical: 'top' },
+    saveBtn: {
+      backgroundColor: theme.primary,
+      borderRadius: 10,
+      paddingVertical: 14,
+      alignItems: 'center',
+      marginTop: 16,
+    },
+    saveText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  });
+}
