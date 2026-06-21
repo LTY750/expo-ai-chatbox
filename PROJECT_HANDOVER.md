@@ -57,16 +57,17 @@ chatbox-app/
 - 会话：新建 / 切换 / 删除 / 重命名 / 标题自动总结
 - 消息级：复制 / 编辑重发 / 重新生成 / 删除（长按气泡菜单）
 - Markdown 渲染 + 代码块折叠（超 12 行）+ 代码一键复制
-- 文档解析：txt/md/csv 本地 + 图片 OCR（DeepSeek-OCR）；解析文本注入上下文
+- LaTeX 数学公式（MathView）+ Mermaid 图表（MermaidView），均走 webview
+- 文档解析：txt/md/csv 本地 + 图片 OCR（DeepSeek-OCR）+ LlamaParse（PDF/Word/PPT/Excel）；解析文本注入上下文
+- 联网搜索（Tavily，做成模型可调用的工具）
+- 深色模式（跟随系统 / 浅 / 深）
 - SecureStore 加密存 Key；旧单服务商配置自动迁移
 
 ## 未完成的功能
 
-- 联网搜索（Tavily）
 - 助手角色 / Prompt 模板
-- 会话搜索、深色模式、字体设置
+- 会话搜索、字体设置
 - 数据导入导出
-- LlamaParse（PDF/Word/PPT/Excel）
 - RAG 本地知识库
 - key 为空时的友好提示（现直接显示服务器 401 原文）
 
@@ -104,7 +105,8 @@ npx tsc --noEmit     # 类型检查
 
 ## 下一步开发建议
 
-优先做**联网搜索（Tavily）**——是立项三大诉求里最后一个，且 Provider 架构已就绪，
-做成模型可调用的工具即可。其次补 **key 为空友好提示** 和 **深色模式 / 会话搜索**
-这类小体验项。LlamaParse 和 RAG 属重活，可后置。
+立项三大诉求（联网搜索 / 文档解析 / 深色模式）均已完成。剩余多为体验项：
+**key 为空友好提示**、**会话搜索**、**助手角色 / Prompt 模板**、**数据导入导出**。
+RAG 本地知识库属重活,可后置。注意 Tavily / LlamaParse / 数学公式 / Mermaid
+已通过编译运行,但功能正确性仍需配各自的 key 做实测。
 

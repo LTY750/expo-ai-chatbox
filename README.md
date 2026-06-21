@@ -26,7 +26,10 @@
 - 会话管理：侧边栏新建 / 切换 / 删除 / 重命名，对话标题模型自动总结
 - 消息级操作：长按复制 / 编辑重发 / 重新生成 / 删除
 - Markdown 渲染 + 代码块折叠 + 代码一键复制
-- 文档解析：txt/md/csv 本地读取 + 图片 OCR（DeepSeek-OCR，独立配置）
+- LaTeX 数学公式渲染（MathView）+ Mermaid 图表渲染（MermaidView）
+- 文档解析：txt/md/csv 本地读取 + 图片 OCR（DeepSeek-OCR）+ LlamaParse（PDF / Word / PPT / Excel）
+- 联网搜索（Tavily，做成模型可调用的工具）
+- 深色模式（跟随系统 / 浅 / 深）
 - 解析内容注入对话上下文
 - API Key 加密存储（SecureStore），旧配置自动迁移
 
@@ -61,11 +64,9 @@ npx tsc --noEmit
 
 ## 后续计划
 
-- 联网搜索（Tavily，做成模型可调用的工具）
 - 助手角色 / Prompt 模板
-- 会话搜索、深色模式、字体设置
+- 会话搜索、字体设置
 - 数据导入导出
-- LlamaParse（PDF / Word / PPT 解析）
 - RAG 本地知识库（远期）
 
 ## 说明

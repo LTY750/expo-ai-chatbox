@@ -640,9 +640,12 @@ function createMdRules(theme: ThemeColors) {
       }
       return null; // 返回 null 让默认样式生效
     },
-    link: (node: any, _children: any) => {
+    link: (node: any, children: any) => {
       const href = node.attributes?.href;
       if (!href) return null;
+      // children 是渲染好的链接显示文字（[显示文字](href)）；
+      // 为空时退回 title，再退回 href
+      const hasChildren = Array.isArray(children) ? children.length > 0 : !!children;
       return (
         <Text
           key={node.key}
@@ -651,7 +654,7 @@ function createMdRules(theme: ThemeColors) {
             Linking.openURL(href).catch(() => {});
           }}
         >
-          {node.attributes?.title || href}
+          {hasChildren ? children : node.attributes?.title || href}
         </Text>
       );
     },
