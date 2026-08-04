@@ -47,13 +47,30 @@ export const DEFAULT_SETTINGS: AppSettings = {
   currentProviderId: 'siliconflow',
   currentModel: 'deepseek-ai/DeepSeek-V3',
   temperature: 0.7,
+  topP: 1,
   maxTokens: 4096,
   systemPrompt: '',
   ocr: { baseURL: SILICONFLOW_BASE_URL, model: 'deepseek-ai/DeepSeek-OCR' },
+  documentParser: {
+    provider: 'llamaparse',
+    aliyun: {
+      endpoint: 'docmind-api.cn-hangzhou.aliyuncs.com',
+      llmEnhancement: true,
+      enhancementMode: '',
+      oss: {
+        bucket: '',
+        endpoint: 'oss-cn-hangzhou.aliyuncs.com',
+        region: 'cn-hangzhou',
+        prefix: 'chatbox-docs/',
+        urlExpiresSeconds: 600,
+      },
+    },
+  },
   theme: 'system',
 };
 
 const DEFAULT_OCR = { baseURL: SILICONFLOW_BASE_URL, model: 'deepseek-ai/DeepSeek-OCR' };
+const DEFAULT_DOCUMENT_PARSER = DEFAULT_SETTINGS.documentParser;
 
 async function ensureKvTable() {
   const db = await getDB();
@@ -96,11 +113,53 @@ function normalizeSettings(s: any): AppSettings {
     providers,
     currentProviderId: cur.id,
     currentModel: model,
-    temperature: s.temperature ?? 0.7,
+    temperature: normalizeNumber(s.temperature, 0.7, 0, 2),
+    topP: normalizeNumber(s.topP ?? s.top_p, 1, 0, 1),
     maxTokens: s.maxTokens ?? 4096,
     systemPrompt: s.systemPrompt ?? '',
     ocr: s.ocr?.baseURL ? s.ocr : DEFAULT_OCR,
+    documentParser: normalizeDocumentParser(s.documentParser),
     theme: s.theme ?? 'system',
+  };
+}
+
+function normalizeNumber(value: unknown, fallback: number, min: number, max: number): number {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
+
+function normalizeDocumentParser(s: any): AppSettings['documentParser'] {
+  const provider = s?.provider === 'aliyun' ? 'aliyun' : 'llamaparse';
+  return {
+    provider,
+    aliyun: {
+      endpoint:
+        typeof s?.aliyun?.endpoint === 'string' && s.aliyun.endpoint.trim()
+          ? s.aliyun.endpoint.trim()
+          : DEFAULT_DOCUMENT_PARSER.aliyun.endpoint,
+      llmEnhancement: s?.aliyun?.llmEnhancement ?? DEFAULT_DOCUMENT_PARSER.aliyun.llmEnhancement,
+      enhancementMode: s?.aliyun?.enhancementMode === 'VLM' ? 'VLM' : '',
+      oss: {
+        bucket: typeof s?.aliyun?.oss?.bucket === 'string' ? s.aliyun.oss.bucket.trim() : '',
+        endpoint:
+          typeof s?.aliyun?.oss?.endpoint === 'string' && s.aliyun.oss.endpoint.trim()
+            ? s.aliyun.oss.endpoint.trim()
+            : DEFAULT_DOCUMENT_PARSER.aliyun.oss.endpoint,
+        region:
+          typeof s?.aliyun?.oss?.region === 'string' && s.aliyun.oss.region.trim()
+            ? s.aliyun.oss.region.trim()
+            : DEFAULT_DOCUMENT_PARSER.aliyun.oss.region,
+        prefix:
+          typeof s?.aliyun?.oss?.prefix === 'string' && s.aliyun.oss.prefix.trim()
+            ? s.aliyun.oss.prefix.trim()
+            : DEFAULT_DOCUMENT_PARSER.aliyun.oss.prefix,
+        urlExpiresSeconds:
+          typeof s?.aliyun?.oss?.urlExpiresSeconds === 'number'
+            ? s.aliyun.oss.urlExpiresSeconds
+            : DEFAULT_DOCUMENT_PARSER.aliyun.oss.urlExpiresSeconds,
+      },
+    },
   };
 }
 
@@ -124,6 +183,7 @@ function migrateFromOldShape(old: any): AppSettings {
     currentProviderId: 'siliconflow',
     currentModel: old?.defaultModel?.model || sf.models[0],
     temperature: old?.defaultModel?.temperature ?? 0.7,
+    topP: old?.defaultModel?.topP ?? old?.defaultModel?.top_p ?? 1,
     maxTokens: old?.defaultModel?.maxTokens ?? 4096,
     systemPrompt: old?.defaultModel?.systemPrompt ?? '',
   });
@@ -170,6 +230,9 @@ export async function setProviderKey(
 
 export async function deleteProviderKey(providerId: string): Promise<void> {
   await platform.deleteSecret(keyName(providerId));
+  if (providerId === 'siliconflow') {
+    await platform.deleteSecret('siliconflow_api_key');
+  }
 }
 
 // ---- OCR 的 key（复用 per-provider 机制，id 固定 'ocr'）----
@@ -179,6 +242,10 @@ export async function getOcrKey(): Promise<string | null> {
 
 export async function setOcrKey(key: string): Promise<void> {
   return setProviderKey('ocr', key);
+}
+
+export async function deleteOcrKey(): Promise<void> {
+  return deleteProviderKey('ocr');
 }
 
 // ---- Tavily 联网搜索的 key（同样复用 per-provider 机制，id 固定 'tavily'）----
@@ -205,5 +272,30 @@ export async function setLlamaParseKey(key: string): Promise<void> {
 
 export async function deleteLlamaParseKey(): Promise<void> {
   return deleteProviderKey('llamaparse');
+}
+
+// ---- 阿里云文档解析（大模型版）AccessKey ----
+export async function getAliyunAccessKeyId(): Promise<string | null> {
+  return getProviderKey('aliyun_docmind_access_key_id');
+}
+
+export async function setAliyunAccessKeyId(key: string): Promise<void> {
+  return setProviderKey('aliyun_docmind_access_key_id', key);
+}
+
+export async function deleteAliyunAccessKeyId(): Promise<void> {
+  return deleteProviderKey('aliyun_docmind_access_key_id');
+}
+
+export async function getAliyunAccessKeySecret(): Promise<string | null> {
+  return getProviderKey('aliyun_docmind_access_key_secret');
+}
+
+export async function setAliyunAccessKeySecret(secret: string): Promise<void> {
+  return setProviderKey('aliyun_docmind_access_key_secret', secret);
+}
+
+export async function deleteAliyunAccessKeySecret(): Promise<void> {
+  return deleteProviderKey('aliyun_docmind_access_key_secret');
 }
 

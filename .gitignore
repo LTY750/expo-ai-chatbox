@@ -61,5 +61,6 @@ key.properties
 local.properties
 
 # dev / debug artifacts produced during this project
+outputs/
 expo.log
 screen.png

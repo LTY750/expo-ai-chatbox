@@ -38,12 +38,14 @@ chatbox-app/
     │   ├── factory.ts       按 type 造 Provider 实例
     │   └── siliconflow.ts   仅保留 baseURL 常量
     ├── parse/
-    │   ├── index.ts         解析路由：文本本地读 / 图片走 OCR
-    │   └── ocr.ts           DeepSeek-OCR（多模态 chat completion）
+    │   ├── index.ts         解析路由：文本本地读 / 图片 OCR / 云文档解析
+    │   ├── ocr.ts           DeepSeek-OCR（多模态 chat completion）
+    │   ├── llamaparse.ts    LlamaParse 文档解析
+    │   └── aliyun.ts        阿里云文档解析（大模型版）
     └── ui/
         ├── ChatScreen.tsx          聊天主界面 + 消息菜单 + 代码块
         ├── Drawer.tsx              侧边栏（会话列表/改名）
-        ├── SettingsScreen.tsx      设置一级页（服务商列表 + OCR + 系统提示词）
+        ├── SettingsScreen.tsx      设置页分栏入口 + 各二级设置页
         └── ProviderDetailScreen.tsx 服务商详情（获取模型弹窗）
 ```
 
@@ -58,7 +60,8 @@ chatbox-app/
 - 消息级：复制 / 编辑重发 / 重新生成 / 删除（长按气泡菜单）
 - Markdown 渲染 + 代码块折叠（超 12 行）+ 代码一键复制
 - LaTeX 数学公式（MathView）+ Mermaid 图表（MermaidView），均走 webview
-- 文档解析：txt/md/csv 本地 + 图片 OCR（DeepSeek-OCR）+ LlamaParse（PDF/Word/PPT/Excel）；解析文本注入上下文
+- 文档解析：txt/md/csv 本地 + 图片 OCR（DeepSeek-OCR）+ LlamaParse / 阿里云文档解析（大模型版）（PDF/Word/PPT/Excel）；解析文本注入上下文
+- 设置页分栏：模型提供商 / 文档解析 / 联网搜索 / 外观 / 全局提示词
 - 联网搜索（Tavily，做成模型可调用的工具）
 - 深色模式（跟随系统 / 浅 / 深）
 - SecureStore 加密存 Key；旧单服务商配置自动迁移
@@ -78,7 +81,8 @@ chatbox-app/
 - **providers/**：每家协议一个类，都实现 streamChat/complete/listModels；
   新增协议只加一个类 + 在 factory 注册。
 - **parse/index.ts**：文件读取在 Expo SDK 56 上有权限坑（见下）。
-- **settings.ts**：`normalizeSettings` 负责旧配置迁移，改数据结构时注意兼容。
+- **settings.ts**：`normalizeSettings` 负责旧配置迁移，改数据结构时注意兼容；阿里云文档解析 AccessKey 存 SecureStore。
+- **parse/aliyun.ts**：阿里云文档解析（大模型版）。当前走 OSS 临时上传 + 签名 URL + `SubmitDocParserJob(FileUrl)`，不再尝试模拟 SDK 的本地文件流上传。
 
 ## 当前已知问题 / 注意事项
 
@@ -90,6 +94,9 @@ chatbox-app/
 - **同步读文件会冻 UI**：禁止用 `textSync()`，必须异步，否则模拟器 ANR。
 - **Markdown 库依赖 punycode**：删 metro.config.js 或 punycode 包会导致打包失败。
 - **改原生模块后**：Fast Refresh 不够，需 force-stop Expo Go 重新加载。
+- **阿里云文档解析（大模型版）接入状态**：代码已接入 OSS 临时 URL 链路，但尚未完成真实文件端到端验收。需要在 App 设置里补齐 RAM AK、OSS Bucket、OSS Endpoint、Region、临时文件前缀，再测试 PDF/Word/PPT。
+- **阿里云本地上传踩坑**：官方文档的 Node SDK 示例里 `SubmitDocParserJobAdvance + fileUrlObject` 是 SDK/runtime 封装的本地文件流上传方法，不是普通 OpenAPI Action。Expo 客户端手写 multipart 调 `SubmitDocParserJob` 会被服务端当作 URL 文件模式，并持续返回 `FileUrl is mandatory`；把 Action 写成 `SubmitDocParserJobAdvance` 则会返回 `Specified api is not found`。因此当前采用官方 URL 上传模式：先上传到 OSS，再把签名 URL 作为 `FileUrl`。
+- **OSS 临时文件**：建议 Bucket 私有读写，前缀 `chatbox-docs/`，配置生命周期规则自动删除 1 天前临时文件。App 解析完成后会尝试 `DELETE` 临时对象，但仍需生命周期兜底。
 - 模型「自我认知」不可靠（会自称 Claude），属 LLM 通病，非 bug。
 
 ## 运行方式
@@ -108,5 +115,6 @@ npx tsc --noEmit     # 类型检查
 立项三大诉求（联网搜索 / 文档解析 / 深色模式）均已完成。剩余多为体验项：
 **key 为空友好提示**、**会话搜索**、**助手角色 / Prompt 模板**、**数据导入导出**。
 RAG 本地知识库属重活,可后置。注意 Tavily / LlamaParse / 数学公式 / Mermaid
-已通过编译运行,但功能正确性仍需配各自的 key 做实测。
+已通过编译运行,但功能正确性仍需配各自的 key 做实测。阿里云文档解析（大模型版）已改为
+OSS 临时 URL 链路，下一步优先补 RAM/OSS 权限并做端到端实测。
 

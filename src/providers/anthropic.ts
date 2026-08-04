@@ -59,6 +59,7 @@ export class AnthropicProvider extends BaseProvider {
           messages: this.toAnthropicMessages(msgs),
           stream: true,
           temperature: settings.temperature,
+          top_p: settings.topP,
           max_tokens: settings.maxTokens ?? 4096, // Anthropic 必填
         };
         if (system) body.system = system;
@@ -109,6 +110,7 @@ export class AnthropicProvider extends BaseProvider {
           }
           cb.onToolCall?.(tc.name, args);
           const result = await executeTool!(tc.name, args, signal);
+          cb.onToolResult?.(tc.name, args, result);
           toolResults.push({ id: tc.id, content: result });
           toolCallCount++;
         }
@@ -144,6 +146,7 @@ export class AnthropicProvider extends BaseProvider {
         system,
         stream: false,
         temperature: settings.temperature,
+        top_p: settings.topP,
         max_tokens: settings.maxTokens ?? 1024,
       }),
       signal,

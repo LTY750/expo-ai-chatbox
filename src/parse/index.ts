@@ -1,16 +1,18 @@
 // 解析层路由 —— 按文件类型分流：文本本地读取 / 图片走 OCR / 文档走 LlamaParse
-// content:// URI（DocumentPicker copyToCacheDirectory:false）自带读权限，
-// 用新 File API 读；legacy 硬拒 content scheme，仅作 file:// 兜底
+// Android 的 DocumentPicker 保留系统授予读取权限的 content:// URI；
+// 新 File API 负责统一读取 content:// / file://，legacy 仅作兼容兜底。
 import { File } from 'expo-file-system';
 import * as FS from 'expo-file-system/legacy';
 import { ocrImage } from './ocr';
 import { parseDocument as llamaParseDocument } from './llamaparse';
+import { parseDocument as aliyunParseDocument } from './aliyun';
 
 // 上层传入的待解析文件（来自 document-picker / image-picker）
 export interface PickedFile {
   uri: string;
   name: string;
   mimeType?: string;
+  size?: number;
 }
 
 export interface OcrConfig {
@@ -21,6 +23,27 @@ export interface OcrConfig {
 
 export interface LlamaParseConfig {
   apiKey: string;
+}
+
+export interface AliyunDocParserConfig {
+  accessKeyId: string;
+  accessKeySecret: string;
+  endpoint: string;
+  llmEnhancement: boolean;
+  enhancementMode?: '' | 'VLM';
+  oss: {
+    bucket: string;
+    endpoint: string;
+    region: string;
+    prefix: string;
+    urlExpiresSeconds: number;
+  };
+}
+
+export interface DocumentParserConfig {
+  provider: 'llamaparse' | 'aliyun';
+  llamaParse?: LlamaParseConfig;
+  aliyun?: AliyunDocParserConfig;
 }
 
 export interface ParseResult {
@@ -69,7 +92,7 @@ const MAX_TEXT_CHARS = 30000; // 防止爆上下文
 export async function parseFile(
   f: PickedFile,
   ocr?: OcrConfig,
-  llamaParse?: LlamaParseConfig
+  documentParser?: DocumentParserConfig
 ): Promise<ParseResult> {
   if (isImage(f)) {
     if (!ocr?.apiKey) {
@@ -91,10 +114,18 @@ export async function parseFile(
   }
 
   if (isDocument(f)) {
-    if (!llamaParse?.apiKey) {
-      throw new Error('请先在设置里配置 LlamaParse 的 API Key');
+    let text = '';
+    if (documentParser?.provider === 'aliyun') {
+      if (!documentParser.aliyun?.accessKeyId || !documentParser.aliyun.accessKeySecret) {
+        throw new Error('请先在设置里配置阿里云文档解析 AccessKey');
+      }
+      text = await aliyunParseDocument(f, documentParser.aliyun);
+    } else {
+      if (!documentParser?.llamaParse?.apiKey) {
+        throw new Error('请先在设置里配置 LlamaParse 的 API Key');
+      }
+      text = await llamaParseDocument(f, documentParser.llamaParse);
     }
-    let text = await llamaParseDocument(f, llamaParse);
     text = truncate(text);
     return { kind: 'document', text };
   }

@@ -6,6 +6,7 @@ import {
   Animated,
   Dimensions,
   FlatList,
+  Keyboard,
   Modal,
   Pressable,
   StyleSheet,
@@ -17,6 +18,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useChatStore } from '../store';
 import { useTheme, type ThemeColors } from '../theme';
 import type { Session } from '../types';
+import { AppIcon } from './AppIcon';
+import { MotionPressable } from './MotionPressable';
 
 const SCREEN_W = Dimensions.get('window').width;
 const DRAWER_W = Math.min(300, SCREEN_W * 0.82);
@@ -39,6 +42,18 @@ export default function Drawer({
   const selectSession = useChatStore((s) => s.selectSession);
   const removeSession = useChatStore((s) => s.removeSession);
   const renameSession = useChatStore((s) => s.renameSession);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const normalizedQuery = searchQuery.trim().toLocaleLowerCase();
+  const filteredSessions = useMemo(
+    () =>
+      normalizedQuery
+        ? sessions.filter((session) =>
+            session.title.toLocaleLowerCase().includes(normalizedQuery)
+          )
+        : sessions,
+    [normalizedQuery, sessions]
+  );
 
   // 改名弹窗
   const [editing, setEditing] = useState<Session | null>(null);
@@ -59,25 +74,36 @@ export default function Drawer({
 
   useEffect(() => {
     Animated.parallel([
-      Animated.timing(tx, {
+      Animated.spring(tx, {
         toValue: open ? 0 : -DRAWER_W,
-        duration: 220,
+        stiffness: 260,
+        damping: 26,
+        mass: 0.85,
         useNativeDriver: true,
       }),
       Animated.timing(fade, {
         toValue: open ? 1 : 0,
-        duration: 220,
+        duration: open ? 180 : 140,
         useNativeDriver: true,
       }),
     ]).start();
   }, [open, tx, fade]);
 
+  useEffect(() => {
+    if (!open) {
+      Keyboard.dismiss();
+      setSearchQuery('');
+    }
+  }, [open]);
+
   async function handleNew() {
+    Keyboard.dismiss();
     await newSession();
     onClose();
   }
 
   async function handleSelect(id: string) {
+    Keyboard.dismiss();
     await selectSession(id);
     onClose();
   }
@@ -100,18 +126,49 @@ export default function Drawer({
       >
         <View style={{ height: insets.top }} />
 
-        <Pressable style={styles.newBtn} onPress={handleNew}>
-          <Text style={styles.newBtnText}>＋ 新对话</Text>
-        </Pressable>
+        <MotionPressable style={styles.newBtn} onPress={handleNew}>
+          <AppIcon name="add" size={21} color={theme.textPrimary} />
+          <Text style={styles.newBtnText}>新对话</Text>
+        </MotionPressable>
 
-        <Text style={styles.sectionLabel}>聊天记录</Text>
+        <View style={styles.searchBox}>
+          <AppIcon name="search" size={18} color={theme.textSecondary} />
+          <TextInput
+            style={styles.searchInput}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            placeholder="搜索对话"
+            placeholderTextColor={theme.placeholder}
+            accessibilityLabel="搜索对话"
+            returnKeyType="search"
+            autoCorrect={false}
+            autoCapitalize="none"
+          />
+          {!!searchQuery && (
+            <MotionPressable
+              style={styles.searchClear}
+              onPress={() => setSearchQuery('')}
+              hitSlop={8}
+              accessibilityLabel="清空对话搜索"
+            >
+              <AppIcon name="close" size={16} color={theme.textSecondary} />
+            </MotionPressable>
+          )}
+        </View>
+
+        <Text style={styles.sectionLabel}>
+          {normalizedQuery ? `搜索结果 · ${filteredSessions.length}` : '聊天记录'}
+        </Text>
 
         <FlatList
           style={styles.flex}
-          data={sessions}
+          data={filteredSessions}
           keyExtractor={(s) => s.id}
+          keyboardShouldPersistTaps="always"
           ListEmptyComponent={
-            <Text style={styles.emptyHint}>还没有对话</Text>
+            <Text style={styles.emptyHint}>
+              {normalizedQuery ? '没有找到匹配的对话' : '还没有对话'}
+            </Text>
           }
           renderItem={({ item }) => (
             <SessionRow
@@ -124,15 +181,16 @@ export default function Drawer({
           )}
         />
 
-        <Pressable
+        <MotionPressable
           style={[styles.footer, { paddingBottom: insets.bottom + 14 }]}
           onPress={() => {
             onClose();
             onOpenSettings();
           }}
         >
-          <Text style={styles.footerText}>⚙  设置</Text>
-        </Pressable>
+          <AppIcon name="settings" size={21} color={theme.textPrimary} />
+          <Text style={styles.footerText}>设置</Text>
+        </MotionPressable>
       </Animated.View>
 
       <Modal
@@ -154,12 +212,15 @@ export default function Drawer({
               onSubmitEditing={commitRename}
             />
             <View style={styles.renameBtns}>
-              <Pressable style={styles.renameCancel} onPress={() => setEditing(null)}>
+              <MotionPressable style={styles.renameCancel} onPress={() => setEditing(null)}>
                 <Text style={styles.renameCancelText}>取消</Text>
-              </Pressable>
-              <Pressable style={styles.renameOk} onPress={commitRename}>
-                <Text style={styles.renameOkText}>确定</Text>
-              </Pressable>
+              </MotionPressable>
+              <MotionPressable style={styles.renameOk} onPress={commitRename}>
+                <View style={styles.inlineButton}>
+                  <AppIcon name="check" size={17} color="#fff" />
+                  <Text style={styles.renameOkText}>确定</Text>
+                </View>
+              </MotionPressable>
             </View>
           </View>
         </View>
@@ -196,9 +257,10 @@ function SessionRow({
   }
 
   return (
-    <Pressable
+    <MotionPressable
       style={[styles.row, active && styles.rowActive]}
       onPress={onPress}
+      pressScale={0.98}
     >
       <Text
         style={[styles.rowTitle, active && styles.rowTitleActive]}
@@ -206,13 +268,13 @@ function SessionRow({
       >
         {session.title}
       </Text>
-      <Pressable onPress={onRename} hitSlop={10} style={styles.rowAction}>
-        <Text style={styles.edit}>✏</Text>
-      </Pressable>
-      <Pressable onPress={handleDelete} hitSlop={10} style={styles.rowAction}>
-        <Text style={styles.del}>🗑</Text>
-      </Pressable>
-    </Pressable>
+      <MotionPressable onPress={onRename} hitSlop={10} style={styles.rowAction}>
+        <AppIcon name="rename" size={15} color={theme.textSecondary} />
+      </MotionPressable>
+      <MotionPressable onPress={handleDelete} hitSlop={10} style={styles.rowAction}>
+        <AppIcon name="delete" size={17} color={theme.danger} />
+      </MotionPressable>
+    </MotionPressable>
   );
 }
 
@@ -238,13 +300,43 @@ function createStyles(theme: ThemeColors) {
       elevation: 16,
     },
     newBtn: {
+      flexDirection: 'row',
       margin: 12,
-      backgroundColor: theme.primary,
-      borderRadius: 10,
+      backgroundColor: theme.surfaceVariant,
+      borderRadius: 14,
       paddingVertical: 12,
       alignItems: 'center',
+      justifyContent: 'flex-start',
+      paddingHorizontal: 14,
+      gap: 7,
     },
-    newBtnText: { color: '#fff', fontSize: 15, fontWeight: '600' },
+    newBtnText: { color: theme.textPrimary, fontSize: 15, fontWeight: '600' },
+    searchBox: {
+      minHeight: 43,
+      marginHorizontal: 12,
+      marginBottom: 12,
+      paddingHorizontal: 12,
+      borderRadius: 13,
+      backgroundColor: theme.inputBg,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: theme.border,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+    },
+    searchInput: {
+      flex: 1,
+      paddingVertical: 9,
+      fontSize: 15,
+      color: theme.textPrimary,
+    },
+    searchClear: {
+      width: 28,
+      height: 28,
+      borderRadius: 14,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
     sectionLabel: {
       fontSize: 12,
       color: theme.textTertiary,
@@ -259,12 +351,16 @@ function createStyles(theme: ThemeColors) {
       paddingHorizontal: 16,
       paddingVertical: 12,
     },
-    rowActive: { backgroundColor: theme.primaryLight },
+    rowActive: { backgroundColor: theme.surfaceVariant },
     rowTitle: { flex: 1, fontSize: 15, color: theme.textPrimary, marginRight: 8 },
-    rowTitleActive: { color: theme.primary, fontWeight: '600' },
-    del: { fontSize: 15 },
-    rowAction: { flexDirection: 'row', alignItems: 'center' },
-    edit: { fontSize: 14, marginRight: 12 },
+    rowTitleActive: { color: theme.textPrimary, fontWeight: '600' },
+    rowAction: {
+      width: 34,
+      height: 34,
+      borderRadius: 17,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
     renameBackdrop: {
       flex: 1,
       backgroundColor: theme.overlay,
@@ -297,7 +393,11 @@ function createStyles(theme: ThemeColors) {
       paddingVertical: 8,
     },
     renameOkText: { color: '#fff', fontSize: 15, fontWeight: '600' },
+    inlineButton: { flexDirection: 'row', alignItems: 'center', gap: 6 },
     footer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
       borderTopWidth: StyleSheet.hairlineWidth,
       borderTopColor: theme.borderLight,
       paddingTop: 14,

@@ -10,8 +10,35 @@ export interface Attachment {
   name: string;
   kind: 'text' | 'image' | 'document';
   status: 'parsing' | 'done' | 'error';
+  size?: number;
+  mimeType?: string;
   chars?: number; // 解析出的字符数
   error?: string;
+  // 文件解析得到的 Markdown 正文；发送后仍可在消息内展开查看和复制
+  parsedText?: string;
+}
+
+export interface ToolSource {
+  title: string;
+  url: string;
+  content: string;
+}
+
+export interface ToolResult {
+  id: string;
+  toolName: string;
+  query?: string;
+  content: string;
+  sources?: ToolSource[];
+}
+
+export interface MessageQuote {
+  messageId: string;
+  role: Role;
+  // UI 只展示这段单行摘要，避免把整条消息塞进输入框或气泡
+  preview: string;
+  // 完整引用正文只用于持久化和模型上下文
+  content: string;
 }
 
 export interface Message {
@@ -24,14 +51,30 @@ export interface Message {
   status?: 'pending' | 'streaming' | 'done' | 'error';
   error?: string;
   attachments?: Attachment[];
+  // 仅发给模型的附件正文；与用户可见的 content 分开持久化
+  attachmentContext?: string;
+  // 微信式引用：界面显示单行摘要，模型仍能读取完整引用正文
+  quote?: MessageQuote;
+  // “插入新话题”不会新建会话，只从这里重新计算后续模型上下文
+  topicBoundary?: boolean;
+  // 工具执行详情（例如联网搜索的网页和返回正文）
+  toolResults?: ToolResult[];
 }
 
 // 模型参数（发给 Provider 的有效设置，运行时由全局参数 + 当前模型拼成）
 export interface ModelSettings {
   model: string;
   temperature?: number;
+  topP?: number;
   maxTokens?: number;
   systemPrompt?: string;
+}
+
+export interface ConversationSettings {
+  userAvatarUri?: string;
+  assistantAvatarUri?: string;
+  backgroundImageUri?: string;
+  autoCompressContext?: boolean;
 }
 
 export interface Session {
@@ -41,10 +84,13 @@ export interface Session {
   updatedAt: number;
   // 会话级模型设置覆盖（为空则继承全局）
   settingsOverride?: Partial<ModelSettings>;
+  // 会话级外观和上下文行为
+  conversationSettings?: ConversationSettings;
 }
 
 // API 协议类型 —— 决定用哪套请求/解析逻辑
 export type ProviderType = 'openai' | 'anthropic';
+export type DocumentParserProvider = 'llamaparse' | 'aliyun';
 
 // 一个 API 服务商：下挂多个模型；key 不在这里，存 SecureStore
 export interface Provider {
@@ -63,10 +109,27 @@ export interface AppSettings {
   currentModel: string;
   // 全局生成参数
   temperature: number;
+  topP: number;
   maxTokens: number;
   systemPrompt: string;
   // 文档解析 OCR（独立配置；key 存 SecureStore，id 固定 'ocr'）
   ocr: { baseURL: string; model: string };
+  // PDF / Word / PPT / Excel 等文档解析服务
+  documentParser: {
+    provider: DocumentParserProvider;
+    aliyun: {
+      endpoint: string;
+      llmEnhancement: boolean;
+      enhancementMode: '' | 'VLM';
+      oss: {
+        bucket: string;
+        endpoint: string;
+        region: string;
+        prefix: string;
+        urlExpiresSeconds: number;
+      };
+    };
+  };
   // 主题模式
   theme: ThemeMode;
 }

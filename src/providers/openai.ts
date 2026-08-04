@@ -34,6 +34,7 @@ export class OpenAICompatProvider extends BaseProvider {
           messages: this.toOpenAIMessages(currentMessages),
           stream: true,
           temperature: settings.temperature,
+          top_p: settings.topP,
           max_tokens: settings.maxTokens,
         };
         // 达到工具调用上限后，本轮不再传 tools，让模型基于已有结果总结
@@ -88,6 +89,7 @@ export class OpenAICompatProvider extends BaseProvider {
           }
           cb.onToolCall?.(tc.name, args);
           const result = await executeTool!(tc.name, args, signal);
+          cb.onToolResult?.(tc.name, args, result);
           currentMessages.push({
             role: 'tool',
             content: result,
@@ -120,6 +122,7 @@ export class OpenAICompatProvider extends BaseProvider {
         messages: this.toOpenAIMessages(messages),
         stream: false,
         temperature: settings.temperature,
+        top_p: settings.topP,
         max_tokens: settings.maxTokens,
       }),
       signal,

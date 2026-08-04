@@ -23,7 +23,8 @@ async function openAndInit(): Promise<SQLite.SQLiteDatabase> {
       title TEXT NOT NULL,
       createdAt INTEGER NOT NULL,
       updatedAt INTEGER NOT NULL,
-      settingsOverride TEXT
+      settingsOverride TEXT,
+      conversationSettings TEXT
     );
     CREATE TABLE IF NOT EXISTS messages (
       id TEXT PRIMARY KEY NOT NULL,
@@ -33,17 +34,33 @@ async function openAndInit(): Promise<SQLite.SQLiteDatabase> {
       createdAt INTEGER NOT NULL,
       status TEXT,
       error TEXT,
+      attachments TEXT,
+      attachmentContext TEXT,
+      quote TEXT,
+      topicBoundary INTEGER,
+      toolResults TEXT,
       FOREIGN KEY (sessionId) REFERENCES sessions(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(sessionId, createdAt);
   `);
-  // 迁移：老库的 messages 表没有 attachments 列，补上（已存在会抛错，忽略）
-  try {
-    await db.execAsync('ALTER TABLE messages ADD COLUMN attachments TEXT');
-  } catch {
-    // 列已存在
-  }
+  await ensureColumn(db, 'messages', 'attachments', 'TEXT');
+  await ensureColumn(db, 'messages', 'attachmentContext', 'TEXT');
+  await ensureColumn(db, 'messages', 'quote', 'TEXT');
+  await ensureColumn(db, 'messages', 'topicBoundary', 'INTEGER');
+  await ensureColumn(db, 'messages', 'toolResults', 'TEXT');
+  await ensureColumn(db, 'sessions', 'conversationSettings', 'TEXT');
   return db;
+}
+
+async function ensureColumn(
+  db: SQLite.SQLiteDatabase,
+  table: string,
+  column: string,
+  definition: string
+): Promise<void> {
+  const columns = await db.getAllAsync<{ name: string }>(`PRAGMA table_info(${table})`);
+  if (columns.some((c) => c.name === column)) return;
+  await db.execAsync(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 
 // ---- 会话 ----
@@ -59,18 +76,19 @@ export async function listSessions(): Promise<Session[]> {
 export async function insertSession(s: Session): Promise<void> {
   const db = await getDB();
   await db.runAsync(
-    'INSERT INTO sessions (id, title, createdAt, updatedAt, settingsOverride) VALUES (?, ?, ?, ?, ?)',
+    'INSERT INTO sessions (id, title, createdAt, updatedAt, settingsOverride, conversationSettings) VALUES (?, ?, ?, ?, ?, ?)',
     s.id,
     s.title,
     s.createdAt,
     s.updatedAt,
-    s.settingsOverride ? JSON.stringify(s.settingsOverride) : null
+    s.settingsOverride ? JSON.stringify(s.settingsOverride) : null,
+    s.conversationSettings ? JSON.stringify(s.conversationSettings) : null
   );
 }
 
 export async function updateSession(
   id: string,
-  patch: Partial<Pick<Session, 'title' | 'updatedAt' | 'settingsOverride'>>
+  patch: Partial<Pick<Session, 'title' | 'updatedAt' | 'settingsOverride' | 'conversationSettings'>>
 ): Promise<void> {
   const db = await getDB();
   const fields: string[] = [];
@@ -87,6 +105,12 @@ export async function updateSession(
     fields.push('settingsOverride = ?');
     values.push(
       patch.settingsOverride ? JSON.stringify(patch.settingsOverride) : null
+    );
+  }
+  if (patch.conversationSettings !== undefined) {
+    fields.push('conversationSettings = ?');
+    values.push(
+      patch.conversationSettings ? JSON.stringify(patch.conversationSettings) : null
     );
   }
   if (!fields.length) return;
@@ -107,16 +131,27 @@ export async function deleteSession(id: string): Promise<void> {
 export async function listMessages(sessionId: string): Promise<Message[]> {
   const db = await getDB();
   const rows = await db.getAllAsync<any>(
-    'SELECT * FROM messages WHERE sessionId = ? ORDER BY createdAt ASC',
+    'SELECT * FROM messages WHERE sessionId = ? ORDER BY createdAt ASC, rowid ASC',
     sessionId
   );
   return rows.map(rowToMessage);
 }
 
+// 应用被杀或热重载后，旧请求不会继续运行；把遗留占位改成可恢复的错误状态。
+export async function markInterruptedMessages(): Promise<void> {
+  const db = await getDB();
+  await db.runAsync(
+    `UPDATE messages
+     SET status = 'error', error = ?
+     WHERE status IN ('pending', 'streaming')`,
+    '生成已中断，请重新生成'
+  );
+}
+
 export async function insertMessage(m: Message): Promise<void> {
   const db = await getDB();
   await db.runAsync(
-    'INSERT INTO messages (id, sessionId, role, content, createdAt, status, error, attachments) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    'INSERT INTO messages (id, sessionId, role, content, createdAt, status, error, attachments, attachmentContext, quote, topicBoundary, toolResults) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     m.id,
     m.sessionId,
     m.role,
@@ -124,7 +159,11 @@ export async function insertMessage(m: Message): Promise<void> {
     m.createdAt,
     m.status ?? null,
     m.error ?? null,
-    m.attachments && m.attachments.length ? JSON.stringify(m.attachments) : null
+    m.attachments && m.attachments.length ? JSON.stringify(m.attachments) : null,
+    m.attachmentContext ?? null,
+    m.quote ? JSON.stringify(m.quote) : null,
+    m.topicBoundary ? 1 : null,
+    m.toolResults?.length ? JSON.stringify(m.toolResults) : null
   );
 }
 
@@ -138,6 +177,10 @@ function rowToMessage(row: any): Message {
     status: row.status ?? undefined,
     error: row.error ?? undefined,
     attachments: row.attachments ? safeParse(row.attachments) : undefined,
+    attachmentContext: row.attachmentContext ?? undefined,
+    quote: row.quote ? safeParse(row.quote) : undefined,
+    topicBoundary: !!row.topicBoundary,
+    toolResults: row.toolResults ? safeParse(row.toolResults) : undefined,
   };
 }
 
@@ -151,7 +194,7 @@ function safeParse(s: string): any {
 
 export async function updateMessage(
   id: string,
-  patch: Partial<Pick<Message, 'content' | 'status' | 'error'>>
+  patch: Partial<Pick<Message, 'content' | 'status' | 'error' | 'toolResults'>>
 ): Promise<void> {
   const db = await getDB();
   const fields: string[] = [];
@@ -167,6 +210,10 @@ export async function updateMessage(
   if (patch.error !== undefined) {
     fields.push('error = ?');
     values.push(patch.error);
+  }
+  if (patch.toolResults !== undefined) {
+    fields.push('toolResults = ?');
+    values.push(patch.toolResults?.length ? JSON.stringify(patch.toolResults) : null);
   }
   if (!fields.length) return;
   values.push(id);
@@ -203,6 +250,9 @@ function rowToSession(row: any): Session {
     updatedAt: row.updatedAt,
     settingsOverride: row.settingsOverride
       ? JSON.parse(row.settingsOverride)
+      : undefined,
+    conversationSettings: row.conversationSettings
+      ? safeParse(row.conversationSettings)
       : undefined,
   };
 }

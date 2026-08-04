@@ -1,7 +1,7 @@
 // LaTeX 公式渲染 —— 用 WebView + MathJax，避免引入原生依赖
 // 支持行内 $...$ 和块级 $$...$$
 // 原理：把公式文本塞进 HTML，让 MathJax 渲染成 SVG，WebView 显示
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { WebView } from 'react-native-webview';
 
 interface MathViewProps {
@@ -11,6 +11,7 @@ interface MathViewProps {
 }
 
 export function MathView({ tex, display = false, color = '#111' }: MathViewProps) {
+  const [height, setHeight] = useState(display ? 56 : 40);
   const html = useMemo(() => {
     const escaped = tex
       .replace(/&/g, '&amp;')
@@ -55,11 +56,19 @@ export function MathView({ tex, display = false, color = '#111' }: MathViewProps
     <WebView
       originWhitelist={['*']}
       source={{ html }}
-      style={{ backgroundColor: 'transparent', height: 40, width: '100%' }}
+      style={{ backgroundColor: 'transparent', height, width: '100%' }}
       scrollEnabled={false}
       javaScriptEnabled
-      onMessage={() => {
-        // 可在此动态调整高度，当前用固定高度简化
+      onMessage={(event) => {
+        try {
+          const message = JSON.parse(event.nativeEvent.data);
+          const measured = Number(message?.height);
+          if (message?.type === 'done' && Number.isFinite(measured)) {
+            setHeight(Math.min(Math.max(measured + 2, display ? 40 : 24), display ? 600 : 120));
+          }
+        } catch {
+          // 忽略非高度消息
+        }
       }}
     />
   );

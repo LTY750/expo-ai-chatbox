@@ -3,22 +3,25 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
   FlatList,
   Image,
   KeyboardAvoidingView,
   Linking,
   Modal,
+  PanResponder,
   Platform as RNPlatform,
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
 import { useChatStore, type PendingAttachment } from '../store';
-import type { Message } from '../types';
+import type { Attachment, Message, MessageQuote, ToolResult } from '../types';
 import { useTheme, darkTheme, type ThemeColors } from '../theme';
 import Markdown from 'react-native-markdown-display';
 import { MathView } from './MathView';
@@ -26,6 +29,10 @@ import { MermaidView } from './MermaidView';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
+import { AppIcon } from './AppIcon';
+import { MotionPressable } from './MotionPressable';
+import ConversationSettingsModal from './ConversationSettingsModal';
+import { estimateTokenCount, prepareContext } from '../context';
 
 export default function ChatScreen({
   onOpenDrawer,
@@ -45,6 +52,7 @@ export default function ChatScreen({
   const providers = useChatStore((s) => s.settings.providers);
   const currentModel = useChatStore((s) => s.settings.currentModel);
   const currentProviderId = useChatStore((s) => s.settings.currentProviderId);
+  const globalSystemPrompt = useChatStore((s) => s.settings.systemPrompt);
   const selectModel = useChatStore((s) => s.selectModel);
   const sessions = useChatStore((s) => s.sessions);
   const currentSessionId = useChatStore((s) => s.currentSessionId);
@@ -52,32 +60,201 @@ export default function ChatScreen({
   const deleteMessage = useChatStore((s) => s.deleteMessage);
   const regenerate = useChatStore((s) => s.regenerate);
   const editAndResend = useChatStore((s) => s.editAndResend);
+  const insertTopicBoundary = useChatStore((s) => s.insertTopicBoundary);
+  const updateConversationSettings = useChatStore((s) => s.updateConversationSettings);
+  const newSession = useChatStore((s) => s.newSession);
   const webSearchEnabled = useChatStore((s) => s.webSearchEnabled);
   const searching = useChatStore((s) => s.searching);
   const tavilyReady = useChatStore((s) => s.tavilyReady);
   const toggleWebSearch = useChatStore((s) => s.toggleWebSearch);
 
-  const title =
-    sessions.find((x) => x.id === currentSessionId)?.title ?? 'Chatbox';
+  const currentSession = sessions.find((x) => x.id === currentSessionId) ?? null;
+  const title = currentSession?.title ?? 'Chatbox';
 
   const [input, setInput] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [expandedProviders, setExpandedProviders] = useState<Set<string>>(
+    () => new Set(currentProviderId ? [currentProviderId] : [])
+  );
   const [attachMenu, setAttachMenu] = useState(false);
+  const [conversationMenu, setConversationMenu] = useState(false);
+  const [conversationSettingsOpen, setConversationSettingsOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingAttachment[]>([]);
+  const [pendingQuote, setPendingQuote] = useState<MessageQuote | null>(null);
   // 消息长按操作菜单 + 编辑弹窗
   const [actionMsg, setActionMsg] = useState<Message | null>(null);
   const [editMsg, setEditMsg] = useState<Message | null>(null);
   const [editText, setEditText] = useState('');
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [previewAttachment, setPreviewAttachment] = useState<Attachment | null>(null);
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const inputRef = useRef<TextInput>(null);
+  const copyFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 注册图片预览回调（供 MarkdownImage 调用）
   useEffect(() => {
     _onPreviewImage = (uri: string) => setPreviewImage(uri);
     return () => { _onPreviewImage = null; };
   }, []);
+
+  useEffect(() => () => {
+    if (copyFeedbackTimerRef.current) clearTimeout(copyFeedbackTimerRef.current);
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+  }, []);
+
+  useEffect(() => {
+    setPendingQuote(null);
+  }, [currentSessionId]);
   const listRef = useRef<FlatList<Message>>(null);
   const nearBottomRef = useRef(true);
+  const edgeTranslateY = useRef(new Animated.Value(0)).current;
+  const topEdgeOpacity = useRef(new Animated.Value(0)).current;
+  const bottomEdgeOpacity = useRef(new Animated.Value(0)).current;
+  const topShadowOpacity = useRef(new Animated.Value(0)).current;
+  const scrollOffsetRef = useRef(0);
+  const viewportHeightRef = useRef(0);
+  const contentHeightRef = useRef(0);
+  const scrollDirectionRef = useRef<'top' | 'bottom' | null>(null);
+  const messageCountRef = useRef(messages.length);
+  const previousMessageCountRef = useRef(messages.length);
+  const allMessagesVisibleRef = useRef(messages.length === 0);
+  const lastEdgeFeedbackRef = useRef({ edge: null as 'top' | 'bottom' | null, time: 0 });
+  messageCountRef.current = messages.length;
+  if (previousMessageCountRef.current !== messages.length) {
+    previousMessageCountRef.current = messages.length;
+    allMessagesVisibleRef.current = messages.length === 0;
+  }
+  const handleViewableItemsChanged = useRef(({
+    viewableItems,
+  }: {
+    viewableItems: Array<{ isViewable: boolean }>;
+  }) => {
+    const messageCount = messageCountRef.current;
+    allMessagesVisibleRef.current = messageCount === 0
+      || viewableItems.filter((item) => item.isViewable).length >= messageCount;
+  }).current;
+  const edgePanResponder = useRef(PanResponder.create({
+    onStartShouldSetPanResponderCapture: () => {
+      scrollDirectionRef.current = null;
+      return false;
+    },
+    onMoveShouldSetPanResponderCapture: (_event, gestureState) => {
+      if (Math.abs(gestureState.dy) < 12) return false;
+      if (allMessagesVisibleRef.current) {
+        triggerEdgeFeedback(gestureState.dy > 0 ? 'top' : 'bottom');
+        return false;
+      }
+      const maxOffset = Math.max(0, contentHeightRef.current - viewportHeightRef.current);
+      const offset = Math.max(0, Math.min(scrollOffsetRef.current, maxOffset));
+      const atTop = offset <= 1;
+      const atBottom = maxOffset - offset <= 1;
+
+      if (atTop && atBottom) {
+        triggerEdgeFeedback(gestureState.dy > 0 ? 'top' : 'bottom');
+      } else if (atTop && gestureState.dy > 0) {
+        triggerEdgeFeedback('top');
+      } else if (atBottom && gestureState.dy < 0) {
+        triggerEdgeFeedback('bottom');
+      }
+      return false;
+    },
+  })).current;
+
+  useEffect(() => () => {
+    edgeTranslateY.stopAnimation();
+    topEdgeOpacity.stopAnimation();
+    bottomEdgeOpacity.stopAnimation();
+    topShadowOpacity.stopAnimation();
+  }, [bottomEdgeOpacity, edgeTranslateY, topEdgeOpacity, topShadowOpacity]);
+
+  const effectiveSystemPrompt = currentSession?.settingsOverride?.systemPrompt
+    ?? globalSystemPrompt;
+  const contextInfo = useMemo(
+    () => prepareContext(
+      messages,
+      effectiveSystemPrompt,
+      !!currentSession?.conversationSettings?.autoCompressContext
+    ),
+    [messages, effectiveSystemPrompt, currentSession?.conversationSettings?.autoCompressContext]
+  );
+  const searchResults = useMemo(() => {
+    const query = searchQuery.trim().toLocaleLowerCase();
+    if (!query) return [];
+    return messages.filter((message) =>
+      !message.topicBoundary && searchableMessageText(message).toLocaleLowerCase().includes(query)
+    );
+  }, [messages, searchQuery]);
+
+  function triggerEdgeFeedback(edge: 'top' | 'bottom') {
+    const now = Date.now();
+    if (
+      lastEdgeFeedbackRef.current.edge === edge
+      && now - lastEdgeFeedbackRef.current.time < 320
+    ) return;
+    lastEdgeFeedbackRef.current = { edge, time: now };
+
+    edgeTranslateY.stopAnimation();
+    topEdgeOpacity.stopAnimation();
+    bottomEdgeOpacity.stopAnimation();
+    edgeTranslateY.setValue(edge === 'top' ? 4 : -4);
+    topEdgeOpacity.setValue(0);
+    bottomEdgeOpacity.setValue(0);
+
+    const opacity = edge === 'top' ? topEdgeOpacity : bottomEdgeOpacity;
+
+    Animated.parallel([
+      Animated.spring(edgeTranslateY, {
+        toValue: 0,
+        stiffness: 260,
+        damping: 18,
+        mass: 0.42,
+        useNativeDriver: true,
+      }),
+      Animated.sequence([
+        Animated.timing(opacity, {
+          toValue: 0.24,
+          duration: 90,
+          useNativeDriver: true,
+        }),
+        Animated.timing(opacity, {
+          toValue: 0,
+          duration: 280,
+          useNativeDriver: true,
+        }),
+      ]),
+    ]).start();
+  }
+
+  function handleScrollSettled(
+    contentOffsetY: number,
+    viewportHeight: number,
+    contentHeight: number
+  ) {
+    const maxOffset = Math.max(0, contentHeight - viewportHeight);
+    const offset = Math.max(0, Math.min(contentOffsetY, maxOffset));
+    const atTop = offset <= 1;
+    const atBottom = maxOffset - offset <= 1;
+    const direction = scrollDirectionRef.current;
+
+    if (atTop && atBottom) {
+      if (direction) triggerEdgeFeedback(direction);
+    } else if (atTop && direction === 'top') {
+      triggerEdgeFeedback('top');
+    } else if (atBottom && direction === 'bottom') {
+      triggerEdgeFeedback('bottom');
+    }
+  }
+
+  useEffect(() => {
+    if (pickerOpen && currentProviderId) {
+      setExpandedProviders((current) => new Set([...current, currentProviderId]));
+    }
+  }, [pickerOpen, currentProviderId]);
 
   // 用户向上翻阅历史时，不强制滚到底部（仅当靠近底部时才自动滚动）
   useEffect(() => {
@@ -97,7 +274,12 @@ export default function ChatScreen({
   const parsing = pending.some((a) => a.status === 'parsing');
 
   // 解析一个选中的文件：先插入 parsing 占位，完成后替换
-  async function runParse(file: { uri: string; name: string; mimeType?: string }) {
+  async function runParse(file: {
+    uri: string;
+    name: string;
+    mimeType?: string;
+    size?: number;
+  }) {
     const placeholder: PendingAttachment = {
       id: Math.random().toString(36).slice(2),
       name: file.name,
@@ -109,7 +291,12 @@ export default function ChatScreen({
     try {
       const result = await parseAttachment(file);
       setPending((p) => p.map((a) => (a.id === placeholder.id ? result : a)));
+      if (result.status === 'error') {
+        setErr(result.error ?? '文件解析失败');
+      }
     } catch (e: any) {
+      const msg = e?.message ?? String(e);
+      setErr(msg);
       setPending((p) =>
         p.map((a) =>
           a.id === placeholder.id
@@ -122,26 +309,31 @@ export default function ChatScreen({
 
   async function pickDocument() {
     setAttachMenu(false);
+    const mimeTypes = [
+      'text/*',
+      'application/json',
+      'application/pdf',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-excel',
+      'application/vnd.ms-powerpoint',
+      'application/vnd.oasis.opendocument.*',
+      'application/rtf',
+      'application/epub+zip',
+    ];
+
     const res = await DocumentPicker.getDocumentAsync({
-      type: [
-        'text/*',
-        'application/json',
-        'application/pdf',
-        'application/msword',
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        'application/vnd.ms-excel',
-        'application/vnd.ms-powerpoint',
-        'application/vnd.oasis.opendocument.*',
-        'application/rtf',
-        'application/epub+zip',
-      ],
-      copyToCacheDirectory: false,
+      type: mimeTypes,
+      // Expo Go 56 会把 Android 缓存副本放到宿主缓存目录，FileSystem 随后
+      // 会因项目级路径权限拒绝读取。Android 保留系统授予权限的 content://
+      // URI 并立即用新版 File API 读取；其他平台仍按 Expo 文档复制到缓存。
+      copyToCacheDirectory: RNPlatform.OS !== 'android',
     });
     if (res.canceled || !res.assets?.length) return;
     const a = res.assets[0];
-    runParse({ uri: a.uri, name: a.name ?? '文件', mimeType: a.mimeType });
+    runParse({ uri: a.uri, name: a.name ?? '文件', mimeType: a.mimeType, size: a.size });
   }
 
   async function pickImage() {
@@ -153,11 +345,71 @@ export default function ChatScreen({
     if (res.canceled || !res.assets?.length) return;
     const a = res.assets[0];
     const name = a.fileName ?? `image_${Date.now()}.jpg`;
-    runParse({ uri: a.uri, name, mimeType: a.mimeType ?? 'image/jpeg' });
+    runParse({
+      uri: a.uri,
+      name,
+      mimeType: a.mimeType ?? 'image/jpeg',
+      size: a.fileSize,
+    });
   }
 
   function removePending(id: string) {
     setPending((p) => p.filter((a) => a.id !== id));
+  }
+
+  function toggleProvider(providerId: string) {
+    setExpandedProviders((current) => {
+      const next = new Set(current);
+      next.has(providerId) ? next.delete(providerId) : next.add(providerId);
+      return next;
+    });
+  }
+
+  async function ensureConversation(): Promise<string> {
+    return currentSessionId ?? newSession();
+  }
+
+  async function handleInsertTopic() {
+    setConversationMenu(false);
+    try {
+      await insertTopicBoundary();
+      setPendingQuote(null);
+      nearBottomRef.current = true;
+      requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
+    } catch (error: any) {
+      setErr(error?.message ?? String(error));
+    }
+  }
+
+  async function openConversationSettings() {
+    setConversationMenu(false);
+    try {
+      await ensureConversation();
+      setConversationSettingsOpen(true);
+    } catch (error: any) {
+      setErr(error?.message ?? String(error));
+    }
+  }
+
+  async function setAutoCompress(enabled: boolean) {
+    try {
+      const sessionId = await ensureConversation();
+      await updateConversationSettings(sessionId, {}, { autoCompressContext: enabled });
+    } catch (error: any) {
+      setErr(error?.message ?? String(error));
+    }
+  }
+
+  function openSearchResult(message: Message) {
+    const index = messages.findIndex((item) => item.id === message.id);
+    if (index < 0) return;
+    setSearchOpen(false);
+    setHighlightedMessageId(message.id);
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    highlightTimerRef.current = setTimeout(() => setHighlightedMessageId(null), 2200);
+    setTimeout(() => {
+      listRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.35 });
+    }, 220);
   }
 
   async function handleSend() {
@@ -166,18 +418,46 @@ export default function ChatScreen({
     if ((!text && !ready.length) || isStreaming || parsing) return;
     setInput('');
     setErr(null);
+    nearBottomRef.current = true;
+    requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
     const toSend = ready;
+    const quoteToSend = pendingQuote ?? undefined;
     setPending([]);
+    setPendingQuote(null);
     try {
-      await sendMessage(text, toSend);
+      await sendMessage(text, toSend, quoteToSend);
     } catch (e: any) {
       setErr(e?.message ?? String(e));
     }
   }
 
   async function copyMsg(m: Message) {
-    await Clipboard.setStringAsync(m.content);
+    if (!m.content) return;
+    try {
+      await Clipboard.setStringAsync(m.content);
+      setCopiedMessageId(m.id);
+      if (copyFeedbackTimerRef.current) clearTimeout(copyFeedbackTimerRef.current);
+      copyFeedbackTimerRef.current = setTimeout(() => setCopiedMessageId(null), 3000);
+      setActionMsg(null);
+    } catch (error: any) {
+      setErr(error?.message ?? '复制失败');
+    }
+  }
+  function quoteMsg(m: Message) {
+    const content = m.content.trim();
+    if (!content) return;
+    setPendingQuote({
+      messageId: m.id,
+      role: m.role,
+      preview: makeQuotePreview(content),
+      content,
+    });
     setActionMsg(null);
+    nearBottomRef.current = true;
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      listRef.current?.scrollToEnd({ animated: true });
+    });
   }
   function startEdit(m: Message) {
     setActionMsg(null);
@@ -188,6 +468,8 @@ export default function ChatScreen({
     if (editMsg) {
       const m = editMsg;
       setEditMsg(null);
+      nearBottomRef.current = true;
+      requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: false }));
       try {
         await editAndResend(m.id, editText);
       } catch (e: any) {
@@ -197,6 +479,8 @@ export default function ChatScreen({
   }
   async function doRegenerate(m: Message) {
     setActionMsg(null);
+    nearBottomRef.current = true;
+    requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: false }));
     try {
       await regenerate(m.id);
     } catch (e: any) {
@@ -205,136 +489,346 @@ export default function ChatScreen({
   }
   async function doDelete(m: Message) {
     setActionMsg(null);
-    await deleteMessage(m.id);
+    try {
+      await deleteMessage(m.id);
+    } catch (error: any) {
+      setErr(error?.message ?? '删除失败');
+    }
   }
 
   return (
     <KeyboardAvoidingView
       style={styles.flex}
-      behavior={RNPlatform.OS === 'ios' ? 'padding' : undefined}
+      behavior={RNPlatform.OS === 'ios' ? 'padding' : 'height'}
     >
       <View style={styles.header}>
-        <Pressable onPress={onOpenDrawer} hitSlop={8} style={styles.headerSide}>
-          <Text style={styles.menuIcon}>☰</Text>
-        </Pressable>
+        <View style={styles.headerActions}>
+          <MotionPressable
+            onPress={onOpenDrawer}
+            hitSlop={8}
+            style={styles.headerSide}
+            accessibilityLabel="打开会话列表"
+          >
+            <AppIcon name="menu" size={25} color={theme.textPrimary} />
+          </MotionPressable>
+          <View style={styles.headerSide} />
+        </View>
         <Text style={styles.headerTitle} numberOfLines={1}>
           {title}
         </Text>
-        <View style={styles.headerSide} />
+        <View style={styles.headerActions}>
+          <MotionPressable
+            onPress={() => setSearchOpen(true)}
+            hitSlop={7}
+            style={styles.headerSide}
+            accessibilityLabel="搜索当前对话"
+          >
+            <AppIcon name="search" size={22} color={theme.textPrimary} />
+          </MotionPressable>
+          <MotionPressable
+            onPress={() => setConversationMenu(true)}
+            hitSlop={7}
+            style={styles.headerSide}
+            accessibilityLabel="对话功能"
+          >
+            <AppIcon name="more" size={18} color={theme.textPrimary} />
+          </MotionPressable>
+        </View>
       </View>
 
       {!keyReady && (
-        <Pressable style={styles.banner} onPress={onOpenSettings}>
+        <MotionPressable style={styles.banner} onPress={onOpenSettings} pressScale={0.98}>
           <Text style={styles.bannerText}>
             当前服务商还没配置 API Key，点这里去设置 →
           </Text>
-        </Pressable>
+        </MotionPressable>
       )}
 
-      <FlatList
-        ref={listRef}
-        style={styles.flex}
-        contentContainerStyle={styles.listContent}
-        data={messages}
-        keyExtractor={(m) => m.id}
-        renderItem={({ item }) => (
-          <MessageBubble msg={item} onLongPress={() => setActionMsg(item)} />
+      <View style={styles.messageArea}>
+        {!!currentSession?.conversationSettings?.backgroundImageUri && (
+          <>
+            <Image
+              source={{ uri: currentSession.conversationSettings.backgroundImageUri }}
+              style={styles.backgroundImage}
+              resizeMode="cover"
+            />
+            <View style={styles.backgroundVeil} pointerEvents="none" />
+          </>
         )}
-        ListEmptyComponent={
-          <Text style={styles.empty}>开始你的第一句对话吧</Text>
-        }
-        onScroll={(e) => {
-          const { layoutMeasurement, contentOffset, contentSize } = e.nativeEvent;
-          const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
-          nearBottomRef.current = distanceFromBottom < 100;
-        }}
-        scrollEventThrottle={16}
-      />
+        <Animated.View
+          style={[styles.flex, { transform: [{ translateY: edgeTranslateY }] }]}
+          {...edgePanResponder.panHandlers}
+        >
+          <FlatList
+            ref={listRef}
+            style={styles.flex}
+            contentContainerStyle={styles.listContent}
+            data={messages}
+            keyExtractor={(m) => m.id}
+            onViewableItemsChanged={handleViewableItemsChanged}
+            renderItem={({ item }) => (
+              <MessageBubble
+                msg={item}
+                copied={copiedMessageId === item.id}
+                highlighted={highlightedMessageId === item.id}
+                userAvatarUri={currentSession?.conversationSettings?.userAvatarUri}
+                assistantAvatarUri={currentSession?.conversationSettings?.assistantAvatarUri}
+                actionsDisabled={isStreaming}
+                onLongPress={() => setActionMsg(item)}
+                onRegenerate={() => doRegenerate(item)}
+                onCopy={() => copyMsg(item)}
+                onQuote={() => quoteMsg(item)}
+                onPreviewAttachment={setPreviewAttachment}
+              />
+            )}
+            ListEmptyComponent={
+              <Text style={styles.empty}>开始你的第一句对话吧</Text>
+            }
+            onLayout={(e) => {
+              viewportHeightRef.current = e.nativeEvent.layout.height;
+            }}
+            onContentSizeChange={(_width, height) => {
+              contentHeightRef.current = height;
+              if (nearBottomRef.current) {
+                requestAnimationFrame(() => {
+                  listRef.current?.scrollToEnd({ animated: false });
+                });
+              }
+            }}
+            onScroll={(e) => {
+              const { layoutMeasurement, contentOffset, contentSize } = e.nativeEvent;
+              viewportHeightRef.current = layoutMeasurement.height;
+              contentHeightRef.current = contentSize.height;
+              const maxOffset = Math.max(0, contentSize.height - layoutMeasurement.height);
+              const offset = Math.max(0, Math.min(contentOffset.y, maxOffset));
+              const distanceFromBottom = maxOffset - offset;
+              if (offset > scrollOffsetRef.current + 0.5) scrollDirectionRef.current = 'bottom';
+              if (offset < scrollOffsetRef.current - 0.5) scrollDirectionRef.current = 'top';
+              scrollOffsetRef.current = offset;
+              nearBottomRef.current = distanceFromBottom < 100;
+              topShadowOpacity.setValue(Math.min(1, offset / 18));
+            }}
+            onScrollEndDrag={(e) => {
+              const { layoutMeasurement, contentOffset, contentSize } = e.nativeEvent;
+              handleScrollSettled(
+                contentOffset.y,
+                layoutMeasurement.height,
+                contentSize.height
+              );
+            }}
+            onMomentumScrollEnd={(e) => {
+              const { layoutMeasurement, contentOffset, contentSize } = e.nativeEvent;
+              handleScrollSettled(contentOffset.y, layoutMeasurement.height, contentSize.height);
+              scrollDirectionRef.current = null;
+            }}
+            onScrollToIndexFailed={(info) => {
+              listRef.current?.scrollToOffset({
+                offset: Math.max(0, info.averageItemLength * info.index),
+                animated: true,
+              });
+            }}
+            overScrollMode={RNPlatform.OS === 'android' ? 'never' : 'auto'}
+            scrollEventThrottle={16}
+          />
+        </Animated.View>
+        <Animated.View
+          pointerEvents="none"
+          style={[styles.topScrollShadow, { opacity: topShadowOpacity }]}
+        >
+          <View style={[styles.scrollShadowLine, { backgroundColor: theme.textPrimary }]} />
+          <View style={[styles.scrollShadowSoft, { backgroundColor: theme.textPrimary }]} />
+        </Animated.View>
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.edgeFeedback,
+            styles.edgeFeedbackTop,
+            { backgroundColor: theme.primary, opacity: topEdgeOpacity },
+          ]}
+        />
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.edgeFeedback,
+            styles.edgeFeedbackBottom,
+            { backgroundColor: theme.primary, opacity: bottomEdgeOpacity },
+          ]}
+        />
+      </View>
 
       {err && <Text style={styles.error}>{err}</Text>}
 
-      {pending.length > 0 && (
-        <View style={styles.pendingBar}>
-          {pending.map((a) => (
-            <View key={a.id} style={styles.pendChip}>
-              <Text style={styles.pendIcon}>{a.kind === 'image' ? '🖼' : '📄'}</Text>
-              <Text style={styles.pendName} numberOfLines={1}>{a.name}</Text>
-              {a.status === 'parsing' ? (
-                <ActivityIndicator size="small" style={styles.pendSpin} color={theme.textSecondary} />
-              ) : a.status === 'error' ? (
-                <Text style={styles.pendErr}>✗</Text>
-              ) : (
-                <Text style={styles.pendOk}>✓</Text>
-              )}
-              <Pressable onPress={() => removePending(a.id)} hitSlop={8}>
-                <Text style={styles.pendClose}>✕</Text>
-              </Pressable>
-            </View>
-          ))}
+      <View style={styles.composerShell}>
+        {pendingQuote && (
+          <View style={styles.composerQuoteBar}>
+            <View style={styles.composerQuoteAccent} />
+            <Text style={styles.composerQuoteText} numberOfLines={1} ellipsizeMode="tail">
+              {`引用 ${pendingQuote.role === 'assistant' ? 'AI' : '我'}：${pendingQuote.preview}`}
+            </Text>
+            <MotionPressable
+              style={styles.composerQuoteClose}
+              onPress={() => setPendingQuote(null)}
+              hitSlop={8}
+              accessibilityLabel="取消引用"
+            >
+              <AppIcon name="close" size={15} color={theme.textSecondary} />
+            </MotionPressable>
+          </View>
+        )}
+        {pending.length > 0 && (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            style={styles.pendingScroll}
+            contentContainerStyle={styles.pendingBar}
+          >
+            {pending.map((a) => {
+              const sizeLabel = formatFileSize(a.size);
+              const readyLabel = sizeLabel
+                ? `${sizeLabel} · 已就绪`
+                : `${a.chars ?? a.text.length} 字 · 已就绪`;
+              return (
+                <View
+                  key={a.id}
+                  style={[styles.pendingCard, a.status === 'error' && styles.pendingCardError]}
+                >
+                  <View style={styles.pendingIconWrap}>
+                    <AppIcon
+                      name={a.kind === 'image' ? 'image' : 'document'}
+                      size={20}
+                      color={a.status === 'error' ? theme.danger : theme.primary}
+                    />
+                  </View>
+                  <View style={styles.pendingCopy}>
+                    <Text style={styles.pendName} numberOfLines={1}>{a.name}</Text>
+                    {a.status === 'parsing' ? (
+                      <View style={styles.pendingStatusRow}>
+                        <ActivityIndicator size="small" style={styles.pendSpin} color={theme.textSecondary} />
+                        <Text style={styles.pendingStatus}>正在读取…</Text>
+                      </View>
+                    ) : a.status === 'error' ? (
+                      <Text
+                        style={[styles.pendingStatus, styles.pendingStatusStandalone, styles.pendErr]}
+                        numberOfLines={1}
+                      >
+                        读取失败
+                      </Text>
+                    ) : (
+                      <Text
+                        style={[styles.pendingStatus, styles.pendingStatusStandalone]}
+                        numberOfLines={1}
+                      >
+                        {readyLabel}
+                      </Text>
+                    )}
+                  </View>
+                  <MotionPressable
+                    style={styles.pendCloseBtn}
+                    onPress={() => removePending(a.id)}
+                    hitSlop={8}
+                    accessibilityLabel={`移除附件 ${a.name}`}
+                  >
+                    <AppIcon name="close" size={15} color={theme.textSecondary} />
+                  </MotionPressable>
+                </View>
+              );
+            })}
+          </ScrollView>
+        )}
+
+        <View style={[
+          styles.inputRow,
+          (pending.length > 0 || pendingQuote) && styles.inputRowWithAttachments,
+        ]}>
+          <MotionPressable
+            style={styles.attachBtn}
+            onPress={() => setAttachMenu(true)}
+            accessibilityLabel="添加附件"
+          >
+            <AppIcon name="attach" size={22} color={theme.textSecondary} />
+          </MotionPressable>
+          <TextInput
+            ref={inputRef}
+            style={styles.input}
+            value={input}
+            onChangeText={setInput}
+            placeholder="输入消息…"
+            placeholderTextColor={theme.placeholder}
+            multiline
+            editable={!isStreaming}
+          />
+          {isStreaming ? (
+          <MotionPressable
+            key="stop"
+            style={[styles.sendBtn, styles.stopBtn]}
+            onPress={stopStreaming}
+            accessibilityLabel="停止生成"
+          >
+            <AppIcon name="stop" size={15} color="#fff" />
+          </MotionPressable>
+          ) : (
+            <MotionPressable
+              key="send"
+              style={[
+                styles.sendBtn,
+                (parsing || (!input.trim() && !pending.some((a) => a.status === 'done'))) &&
+                  styles.sendBtnDisabled,
+              ]}
+              onPress={handleSend}
+              disabled={parsing || (!input.trim() && !pending.some((a) => a.status === 'done'))}
+              accessibilityLabel="发送消息"
+            >
+              <AppIcon name="send" size={23} color="#fff" />
+            </MotionPressable>
+          )}
         </View>
-      )}
+      </View>
 
       <View style={styles.toolBar}>
-        <Pressable
+        <MotionPressable
           style={[styles.webBtn, webSearchEnabled && styles.webBtnActive, isStreaming && styles.webBtnDisabled]}
           onPress={toggleWebSearch}
           disabled={isStreaming}
         >
-          <Text style={styles.webIcon}>🌐</Text>
+          <AppIcon
+            name="search"
+            size={16}
+            color={webSearchEnabled ? theme.primary : theme.textSecondary}
+            style={styles.webIcon}
+          />
           <Text style={[styles.webText, webSearchEnabled && styles.webTextActive]}>
             联网搜索
           </Text>
-        </Pressable>
+        </MotionPressable>
         {searching && (
           <View style={styles.searchingBar}>
             <ActivityIndicator size="small" color={theme.textSecondary} />
-            <Text style={styles.searchingText}>正在搜索…</Text>
+            <Text style={styles.searchingText}>搜索中</Text>
           </View>
         )}
-      </View>
-      {webSearchEnabled && !tavilyReady && (
-        <Pressable style={styles.webWarn} onPress={onOpenSettings}>
-          <Text style={styles.webWarnText}>未配置 Tavily Key，点这里去设置 →</Text>
-        </Pressable>
-      )}
-
-      <View style={styles.inputRow}>
-        <Pressable style={styles.attachBtn} onPress={() => setAttachMenu(true)}>
-          <Text style={styles.attachIcon}>📎</Text>
-        </Pressable>
-        <Pressable style={styles.modelBtn} onPress={() => setPickerOpen(true)}>
+        <View style={styles.toolSpacer} />
+        <Text
+          style={[styles.contextUsage, contextInfo.compressed && styles.contextUsageCompressed]}
+          numberOfLines={1}
+          accessibilityLabel={`当前上下文约 ${contextInfo.effectiveTokens} tokens`}
+        >
+          {contextInfo.compressed
+            ? `上下文 ${formatTokenAmount(contextInfo.effectiveTokens)} / ${formatTokenAmount(contextInfo.originalTokens)}`
+            : `上下文 ${formatTokenAmount(contextInfo.effectiveTokens)}`}
+        </Text>
+        <MotionPressable style={styles.modelBtn} onPress={() => setPickerOpen(true)}>
           <Text style={styles.modelBtnText} numberOfLines={1}>
             {shortModelName(currentModel) || '选模型'}
           </Text>
-          <Text style={styles.modelBtnCaret}>▾</Text>
-        </Pressable>
-        <TextInput
-          style={styles.input}
-          value={input}
-          onChangeText={setInput}
-          placeholder="输入消息…"
-          placeholderTextColor={theme.placeholder}
-          multiline
-          editable={!isStreaming}
-        />
-        {isStreaming ? (
-          <Pressable style={[styles.sendBtn, styles.stopBtn]} onPress={stopStreaming}>
-            <Text style={styles.sendText}>停止</Text>
-          </Pressable>
-        ) : (
-          <Pressable
-            style={[
-              styles.sendBtn,
-              (parsing || (!input.trim() && !pending.some((a) => a.status === 'done'))) &&
-                styles.sendBtnDisabled,
-            ]}
-            onPress={handleSend}
-            disabled={parsing || (!input.trim() && !pending.some((a) => a.status === 'done'))}
-          >
-            <Text style={styles.sendText}>发送</Text>
-          </Pressable>
-        )}
+          <AppIcon name="chevronDown" size={14} color={theme.textSecondary} />
+        </MotionPressable>
       </View>
+      {webSearchEnabled && !tavilyReady && (
+        <MotionPressable style={styles.webWarn} onPress={onOpenSettings} pressScale={0.98}>
+          <Text style={styles.webWarnText}>未配置 Tavily Key，点这里去设置 →</Text>
+        </MotionPressable>
+      )}
 
       <Modal
         visible={attachMenu}
@@ -344,12 +838,14 @@ export default function ChatScreen({
       >
         <Pressable style={styles.menuBackdrop} onPress={() => setAttachMenu(false)}>
           <View style={styles.menuSheet}>
-            <Pressable style={styles.menuItem} onPress={pickDocument}>
-              <Text style={styles.menuText}>📄  选择文件（txt / md / csv）</Text>
-            </Pressable>
-            <Pressable style={styles.menuItem} onPress={pickImage}>
-              <Text style={styles.menuText}>🖼  选择图片（OCR 识别）</Text>
-            </Pressable>
+            <MotionPressable style={styles.menuItem} onPress={pickDocument}>
+              <AppIcon name="document" size={21} color={theme.primary} />
+              <Text style={styles.menuText}>选择文件（txt / md / csv）</Text>
+            </MotionPressable>
+            <MotionPressable style={styles.menuItem} onPress={pickImage}>
+              <AppIcon name="image" size={21} color={theme.primary} />
+              <Text style={styles.menuText}>选择图片（OCR 识别）</Text>
+            </MotionPressable>
           </View>
         </Pressable>
       </Modal>
@@ -357,7 +853,7 @@ export default function ChatScreen({
       <Modal
         visible={pickerOpen}
         transparent
-        animationType="fade"
+        animationType="slide"
         onRequestClose={() => setPickerOpen(false)}
       >
         <Pressable style={styles.modalBackdrop} onPress={() => setPickerOpen(false)}>
@@ -365,44 +861,202 @@ export default function ChatScreen({
             <Text style={styles.modalTitle}>选择模型</Text>
             <ScrollView style={styles.modalList}>
               {providers.map((p) => (
-                <View key={p.id}>
-                  <Text style={styles.groupLabel}>{p.name}</Text>
-                  {p.models.length === 0 && (
-                    <Text style={styles.groupEmpty}>（无模型）</Text>
+                <View
+                  key={p.id}
+                  style={[
+                    styles.providerGroup,
+                    p.id === currentProviderId && styles.providerGroupActive,
+                  ]}
+                >
+                  <MotionPressable
+                    style={styles.providerHeader}
+                    onPress={() => toggleProvider(p.id)}
+                    accessibilityLabel={`${expandedProviders.has(p.id) ? '折叠' : '展开'} ${p.name}`}
+                  >
+                    <View style={styles.providerMark}>
+                      <AppIcon name="model" size={18} color={theme.primary} />
+                    </View>
+                    <View style={styles.providerCopy}>
+                      <Text style={styles.groupLabel} numberOfLines={1}>{p.name}</Text>
+                      <Text style={styles.providerMeta}>
+                        {p.type === 'anthropic' ? 'Anthropic 原生' : 'OpenAI 兼容'} · {p.models.length} 个模型
+                      </Text>
+                    </View>
+                    <View style={[
+                      styles.protocolPill,
+                      p.type === 'anthropic' && styles.protocolPillAnthropic,
+                    ]}>
+                      <Text style={[
+                        styles.protocolPillText,
+                        p.type === 'anthropic' && styles.protocolPillTextAnthropic,
+                      ]}>
+                        {p.type === 'anthropic' ? 'A' : 'OAI'}
+                      </Text>
+                    </View>
+                    <AppIcon
+                      name={expandedProviders.has(p.id) ? 'collapse' : 'expand'}
+                      size={16}
+                      color={theme.textSecondary}
+                    />
+                  </MotionPressable>
+                  {expandedProviders.has(p.id) && (
+                    <View style={styles.providerModels}>
+                      {p.models.length === 0 && (
+                        <Text style={styles.groupEmpty}>还没有模型，请到服务商设置中添加</Text>
+                      )}
+                      {p.models.map((m) => {
+                        const active = m === currentModel && p.id === currentProviderId;
+                        return (
+                          <MotionPressable
+                            key={p.id + m}
+                            style={[styles.modelRow, active && styles.modelRowActive]}
+                            onPress={() => {
+                              selectModel(p.id, m);
+                              setPickerOpen(false);
+                            }}
+                          >
+                            <Text style={[styles.modelName, active && styles.modelNameActive]}>
+                              {m}
+                            </Text>
+                            {active && <AppIcon name="check" size={18} color={theme.primary} />}
+                          </MotionPressable>
+                        );
+                      })}
+                    </View>
                   )}
-                  {p.models.map((m) => {
-                    const active = m === currentModel && p.id === currentProviderId;
-                    return (
-                      <Pressable
-                        key={p.id + m}
-                        style={styles.modelRow}
-                        onPress={() => {
-                          selectModel(p.id, m);
-                          setPickerOpen(false);
-                        }}
-                      >
-                        <Text style={[styles.modelName, active && styles.modelNameActive]}>
-                          {m}
-                        </Text>
-                        {active && <Text style={styles.modelCheck}>✓</Text>}
-                      </Pressable>
-                    );
-                  })}
                 </View>
               ))}
             </ScrollView>
-            <Pressable
+            <MotionPressable
               style={styles.modelManage}
               onPress={() => {
                 setPickerOpen(false);
                 onOpenSettings();
               }}
             >
-              <Text style={styles.modelManageText}>管理服务商和模型…</Text>
-            </Pressable>
+              <View style={styles.menuItemInline}>
+                <AppIcon name="settings" size={18} color={theme.primary} />
+                <Text style={styles.modelManageText}>管理服务商和模型</Text>
+              </View>
+            </MotionPressable>
           </View>
         </Pressable>
       </Modal>
+
+      <Modal
+        visible={conversationMenu}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setConversationMenu(false)}
+      >
+        <View style={styles.menuBackdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setConversationMenu(false)} />
+          <View style={styles.menuSheet}>
+            <Text style={styles.conversationMenuTitle}>当前对话</Text>
+            <MotionPressable
+              style={[styles.menuItem, isStreaming && styles.answerActionDisabled]}
+              onPress={handleInsertTopic}
+              disabled={isStreaming}
+            >
+              <AppIcon name="add" size={21} color={theme.primary} />
+              <View style={styles.menuItemCopy}>
+                <Text style={styles.menuText}>插入新话题</Text>
+                <Text style={styles.menuHint}>留在当前对话，只从这里开始新的模型上下文</Text>
+              </View>
+            </MotionPressable>
+            <MotionPressable style={styles.menuItem} onPress={openConversationSettings}>
+              <AppIcon name="settings" size={20} color={theme.primary} />
+              <View style={styles.menuItemCopy}>
+                <Text style={styles.menuText}>对话设置</Text>
+                <Text style={styles.menuHint}>头像、参数、背景图片和系统提示词</Text>
+              </View>
+              <AppIcon name="chevronRight" size={18} color={theme.textTertiary} />
+            </MotionPressable>
+            <View style={styles.menuItem}>
+              <AppIcon name="generation" size={20} color={theme.primary} />
+              <View style={styles.menuItemCopy}>
+                <Text style={styles.menuText}>自动压缩上下文</Text>
+                <Text style={styles.menuHint}>
+                  {contextInfo.compressed ? '当前已压缩，完整聊天记录不会删除' : '超过约 12k tokens 时自动压缩旧内容'}
+                </Text>
+              </View>
+              <Switch
+                value={!!currentSession?.conversationSettings?.autoCompressContext}
+                onValueChange={setAutoCompress}
+                trackColor={{ false: theme.border, true: theme.primary }}
+                disabled={isStreaming}
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={searchOpen}
+        animationType="slide"
+        onRequestClose={() => setSearchOpen(false)}
+      >
+        <View style={[styles.searchScreen, { backgroundColor: theme.background }]}>
+          <View style={styles.searchHeader}>
+            <MotionPressable
+              style={styles.searchBack}
+              onPress={() => setSearchOpen(false)}
+              accessibilityLabel="关闭对话搜索"
+            >
+              <AppIcon name="back" size={26} color={theme.primary} />
+            </MotionPressable>
+            <View style={styles.searchInputWrap}>
+              <AppIcon name="search" size={18} color={theme.textTertiary} />
+              <TextInput
+                style={styles.searchInput}
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                placeholder="搜索当前对话"
+                placeholderTextColor={theme.placeholder}
+                autoFocus
+                returnKeyType="search"
+              />
+              {!!searchQuery && (
+                <MotionPressable onPress={() => setSearchQuery('')} hitSlop={8}>
+                  <AppIcon name="close" size={18} color={theme.textTertiary} />
+                </MotionPressable>
+              )}
+            </View>
+          </View>
+          <Text style={styles.searchCount}>
+            {searchQuery.trim() ? `找到 ${searchResults.length} 条结果` : '输入关键词搜索消息和附件解析内容'}
+          </Text>
+          <FlatList
+            data={searchResults}
+            keyExtractor={(message) => message.id}
+            contentContainerStyle={styles.searchResults}
+            keyboardShouldPersistTaps="handled"
+            renderItem={({ item }) => (
+              <MotionPressable style={styles.searchResult} onPress={() => openSearchResult(item)}>
+                <View style={styles.searchResultHeader}>
+                  <Text style={styles.searchResultRole}>
+                    {item.role === 'user' ? '我' : 'AI 助手'}
+                  </Text>
+                  <Text style={styles.searchResultTime}>{formatMessageTime(item.createdAt)}</Text>
+                </View>
+                <Text style={styles.searchResultText} numberOfLines={3}>
+                  {searchableMessageText(item)}
+                </Text>
+              </MotionPressable>
+            )}
+            ListEmptyComponent={
+              searchQuery.trim() ? <Text style={styles.searchEmpty}>没有找到匹配内容</Text> : null
+            }
+          />
+        </View>
+      </Modal>
+
+      <ConversationSettingsModal
+        visible={conversationSettingsOpen}
+        session={currentSession}
+        onClose={() => setConversationSettingsOpen(false)}
+        onError={setErr}
+      />
 
       <Modal
         visible={!!actionMsg}
@@ -412,22 +1066,26 @@ export default function ChatScreen({
       >
         <Pressable style={styles.menuBackdrop} onPress={() => setActionMsg(null)}>
           <View style={styles.menuSheet}>
-            <Pressable style={styles.menuItem} onPress={() => actionMsg && copyMsg(actionMsg)}>
-              <Text style={styles.menuText}>📋  复制</Text>
-            </Pressable>
+            <MotionPressable style={styles.menuItem} onPress={() => actionMsg && copyMsg(actionMsg)}>
+              <AppIcon name="copy" size={20} color={theme.textPrimary} />
+              <Text style={styles.menuText}>复制</Text>
+            </MotionPressable>
             {actionMsg?.role === 'user' && (
-              <Pressable style={styles.menuItem} onPress={() => actionMsg && startEdit(actionMsg)}>
-                <Text style={styles.menuText}>✏️  编辑并重发</Text>
-              </Pressable>
+              <MotionPressable style={styles.menuItem} onPress={() => actionMsg && startEdit(actionMsg)}>
+                <AppIcon name="edit" size={20} color={theme.textPrimary} />
+                <Text style={styles.menuText}>编辑并重发</Text>
+              </MotionPressable>
             )}
             {actionMsg?.role === 'assistant' && actionMsg.status !== 'streaming' && (
-              <Pressable style={styles.menuItem} onPress={() => actionMsg && doRegenerate(actionMsg)}>
-                <Text style={styles.menuText}>🔄  重新生成</Text>
-              </Pressable>
+              <MotionPressable style={styles.menuItem} onPress={() => actionMsg && doRegenerate(actionMsg)}>
+                <AppIcon name="retry" size={20} color={theme.textPrimary} />
+                <Text style={styles.menuText}>重新生成</Text>
+              </MotionPressable>
             )}
-            <Pressable style={styles.menuItem} onPress={() => actionMsg && doDelete(actionMsg)}>
-              <Text style={[styles.menuText, styles.menuDanger]}>🗑  删除</Text>
-            </Pressable>
+            <MotionPressable style={styles.menuItem} onPress={() => actionMsg && doDelete(actionMsg)}>
+              <AppIcon name="delete" size={20} color={theme.danger} />
+              <Text style={[styles.menuText, styles.menuDanger]}>删除</Text>
+            </MotionPressable>
           </View>
         </Pressable>
       </Modal>
@@ -450,23 +1108,31 @@ export default function ChatScreen({
               placeholderTextColor={theme.placeholder}
             />
             <View style={styles.editBtns}>
-              <Pressable style={styles.editCancel} onPress={() => setEditMsg(null)}>
+              <MotionPressable style={styles.editCancel} onPress={() => setEditMsg(null)}>
                 <Text style={styles.editCancelText}>取消</Text>
-              </Pressable>
-              <Pressable style={styles.editOk} onPress={commitEdit}>
-                <Text style={styles.editOkText}>重发</Text>
-              </Pressable>
+              </MotionPressable>
+              <MotionPressable style={styles.editOk} onPress={commitEdit}>
+                <View style={styles.menuItemInline}>
+                  <AppIcon name="send" size={17} color="#fff" />
+                  <Text style={styles.editOkText}>重发</Text>
+                </View>
+              </MotionPressable>
             </View>
           </View>
         </View>
       </Modal>
 
+      <AttachmentPreviewModal
+        attachment={previewAttachment}
+        onClose={() => setPreviewAttachment(null)}
+      />
+
       {/* 图片大图预览 */}
       <Modal visible={!!previewImage} transparent animationType="fade" onRequestClose={() => setPreviewImage(null)}>
         <View style={styles.previewOverlay}>
-          <Pressable style={styles.previewClose} onPress={() => setPreviewImage(null)}>
-            <Text style={styles.previewCloseText}>✕</Text>
-          </Pressable>
+          <MotionPressable style={styles.previewClose} onPress={() => setPreviewImage(null)}>
+            <AppIcon name="close" size={23} color="#fff" />
+          </MotionPressable>
           {previewImage && (
             <Image
               source={{ uri: previewImage }}
@@ -487,51 +1153,429 @@ function shortModelName(m: string): string {
   return slash >= 0 ? m.slice(slash + 1) : m;
 }
 
+function formatTokenAmount(tokens: number): string {
+  if (tokens < 1000) return `${tokens}`;
+  return `${(tokens / 1000).toFixed(tokens < 10_000 ? 1 : 0)}k`;
+}
+
+function formatMessageTime(timestamp: number): string {
+  const date = new Date(timestamp);
+  return `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
+
+function formatFileSize(size?: number): string | null {
+  if (typeof size !== 'number' || !Number.isFinite(size) || size < 0) return null;
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(size < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+const QUOTE_PREVIEW_LIMIT = 72;
+
+function makeQuotePreview(content: string): string {
+  const compact = content
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/[>*_~`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (compact.length <= QUOTE_PREVIEW_LIMIT) return compact;
+  return `${compact.slice(0, QUOTE_PREVIEW_LIMIT).trimEnd()}…`;
+}
+
+function searchableMessageText(message: Message): string {
+  return [
+    message.content,
+    ...(message.attachments?.map((attachment) =>
+      `${attachment.name}\n${attachment.parsedText ?? ''}`
+    ) ?? []),
+    ...(message.toolResults?.map((result) => result.content) ?? []),
+  ].filter(Boolean).join('\n\n');
+}
+
 function MessageBubble({
   msg,
+  copied,
+  highlighted,
+  userAvatarUri,
+  assistantAvatarUri,
+  actionsDisabled,
   onLongPress,
+  onRegenerate,
+  onCopy,
+  onQuote,
+  onPreviewAttachment,
 }: {
   msg: Message;
+  copied: boolean;
+  highlighted: boolean;
+  userAvatarUri?: string;
+  assistantAvatarUri?: string;
+  actionsDisabled: boolean;
   onLongPress: () => void;
+  onRegenerate: () => void;
+  onCopy: () => void;
+  onQuote: () => void;
+  onPreviewAttachment: (attachment: Attachment) => void;
 }) {
   const theme = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
   const mdStyles = useMemo(() => createMdStyles(theme), [theme]);
   const mdRules = useMemo(() => createMdRules(theme), [theme]);
+  const appear = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.spring(appear, {
+      toValue: 1,
+      useNativeDriver: true,
+      speed: 34,
+      bounciness: 2,
+    }).start();
+  }, [appear]);
 
   const isUser = msg.role === 'user';
+  const isAssistant = msg.role === 'assistant';
   const streaming = msg.status === 'streaming';
+  const tokenCount = useMemo(() => estimateTokenCount(msg.content), [msg.content]);
+  const showActions = isAssistant && !streaming && !!msg.content;
+  if (msg.topicBoundary) {
+    return <TopicBoundary createdAt={msg.createdAt} />;
+  }
   return (
-    <View style={[styles.bubbleRow, isUser ? styles.rowRight : styles.rowLeft]}>
-      <Pressable
-        style={[styles.bubble, isUser ? styles.userBubble : styles.aiBubble]}
-        onLongPress={onLongPress}
-        delayLongPress={350}
-      >
-        {msg.attachments?.map((a) => (
-          <View key={a.id} style={styles.attCard}>
-            <Text style={styles.attIcon}>{a.kind === 'image' ? '🖼' : '📄'}</Text>
-            <Text style={styles.attName} numberOfLines={1}>{a.name}</Text>
-            {!!a.chars && <Text style={styles.attMeta}>{a.chars} 字</Text>}
+    <Animated.View
+      style={[
+        styles.bubbleRow,
+        isUser ? styles.rowRight : styles.rowLeft,
+        {
+          opacity: appear,
+          transform: [
+            {
+              translateY: appear.interpolate({
+                inputRange: [0, 1],
+                outputRange: [8, 0],
+              }),
+            },
+          ],
+        },
+      ]}
+    >
+      {!isUser && (
+        <View style={styles.assistantAvatarSlot}>
+          <MessageAvatar uri={assistantAvatarUri} fallback="AI" />
+        </View>
+      )}
+      <View style={[styles.messageColumn, isUser ? styles.messageColumnRight : styles.messageColumnLeft]}>
+        <Pressable
+          style={[
+            styles.bubble,
+            isUser ? styles.userBubble : styles.aiBubble,
+            highlighted && styles.bubbleHighlighted,
+          ]}
+          onLongPress={onLongPress}
+          delayLongPress={350}
+        >
+          {msg.quote && (
+            <View style={styles.messageQuoteBar}>
+              <View style={styles.messageQuoteAccent} />
+              <Text style={styles.messageQuoteText} numberOfLines={1} ellipsizeMode="tail">
+                {`引用 ${msg.quote.role === 'assistant' ? 'AI' : '我'}：${msg.quote.preview}`}
+              </Text>
+            </View>
+          )}
+          {msg.attachments?.map((attachment) => (
+            <AttachmentPanel
+              key={attachment.id}
+              attachment={attachment}
+              onPreview={() => onPreviewAttachment(attachment)}
+            />
+          ))}
+          {!!msg.attachments?.length && !msg.attachmentContext && (
+            <Text style={styles.bubbleErr}>⚠ 旧附件正文未保存，请重新上传</Text>
+          )}
+          {msg.toolResults?.map((result) => (
+            <ToolResultPanel key={result.id} result={result} />
+          ))}
+          {msg.content ? (
+            isUser ? (
+              <Text style={[styles.bubbleText, styles.userText]}>{msg.content}</Text>
+            ) : (
+              <Markdown style={mdStyles} rules={mdRules}>
+                {preprocessLatex(msg.content)}
+              </Markdown>
+            )
+          ) : streaming ? (
+            <ActivityIndicator size="small" color={theme.textSecondary} />
+          ) : null}
+          {msg.status === 'error' && (
+            <Text style={styles.bubbleErr}>⚠ {msg.error}</Text>
+          )}
+        </Pressable>
+        {showActions && (
+          <View style={styles.answerActions}>
+            <Text style={styles.tokenCount}>≈{tokenCount} tokens</Text>
+            <MotionPressable
+              style={[styles.answerAction, actionsDisabled && styles.answerActionDisabled]}
+              onPress={onRegenerate}
+              disabled={actionsDisabled}
+              accessibilityLabel="重新生成回答"
+              accessibilityRole="button"
+              hitSlop={6}
+            >
+              <AppIcon name="retry" size={16} color={theme.textSecondary} />
+            </MotionPressable>
+            <MotionPressable
+              style={[styles.answerAction, actionsDisabled && styles.answerActionDisabled]}
+              onPress={onCopy}
+              disabled={actionsDisabled}
+              accessibilityLabel={copied ? '已复制回答' : '复制回答'}
+              accessibilityRole="button"
+              hitSlop={6}
+            >
+              <AppIcon
+                name={copied ? 'check' : 'copy'}
+                size={16}
+                color={copied ? theme.primary : theme.textSecondary}
+              />
+            </MotionPressable>
+            <MotionPressable
+              style={[styles.answerAction, actionsDisabled && styles.answerActionDisabled]}
+              onPress={onQuote}
+              disabled={actionsDisabled}
+              accessibilityLabel="引用回答"
+              accessibilityRole="button"
+              hitSlop={6}
+            >
+              <AppIcon name="quote" size={16} color={theme.textSecondary} />
+            </MotionPressable>
           </View>
-        ))}
-        {msg.content ? (
-          isUser ? (
-            // 用户消息：纯文本即可
-            <Text style={[styles.bubbleText, styles.userText]}>{msg.content}</Text>
-          ) : (
-            // AI 回复：渲染 Markdown（代码块可折叠 + LaTeX 公式 + 可点击链接/图片）
-            <Markdown style={mdStyles} rules={mdRules}>
-              {preprocessLatex(msg.content)}
-            </Markdown>
-          )
-        ) : streaming ? (
-          <ActivityIndicator size="small" color={theme.textSecondary} />
-        ) : null}
-        {msg.status === 'error' && (
-          <Text style={styles.bubbleErr}>⚠ {msg.error}</Text>
         )}
-      </Pressable>
+      </View>
+      {isUser && <MessageAvatar uri={userAvatarUri} fallback="我" />}
+    </Animated.View>
+  );
+}
+
+function MessageAvatar({ uri, fallback }: { uri?: string; fallback: string }) {
+  const theme = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
+  return uri ? (
+    <Image source={{ uri }} style={styles.messageAvatar} />
+  ) : (
+    <View style={styles.messageAvatarFallback}>
+      <Text style={styles.messageAvatarText}>{fallback}</Text>
+    </View>
+  );
+}
+
+function TopicBoundary({ createdAt }: { createdAt: number }) {
+  const theme = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
+  return (
+    <View style={styles.topicBoundary}>
+      <View style={styles.topicLine} />
+      <View style={styles.topicLabel}>
+        <AppIcon name="add" size={14} color={theme.primary} />
+        <Text style={styles.topicText}>新话题 · {formatMessageTime(createdAt)}</Text>
+      </View>
+      <View style={styles.topicLine} />
+    </View>
+  );
+}
+
+function AttachmentPanel({
+  attachment,
+  onPreview,
+}: {
+  attachment: Attachment;
+  onPreview: () => void;
+}) {
+  const theme = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
+  const [copied, setCopied] = useState(false);
+  const hasParsedText = !!attachment.parsedText?.trim();
+  const details = [
+    formatFileSize(attachment.size),
+    hasParsedText ? `${attachment.chars ?? attachment.parsedText!.length} 字` : null,
+    hasParsedText ? '点击预览' : '无可预览内容',
+  ].filter(Boolean).join(' · ');
+
+  async function copyParsedText() {
+    if (!attachment.parsedText) return;
+    await Clipboard.setStringAsync(attachment.parsedText);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1600);
+  }
+
+  return (
+    <View style={styles.attachmentPanel}>
+      <View style={styles.attachmentHeader}>
+        <MotionPressable
+          style={styles.attachmentToggle}
+          onPress={onPreview}
+          disabled={!hasParsedText}
+          accessibilityRole="button"
+          accessibilityLabel={`${attachment.name}，${hasParsedText ? '点击预览文件内容' : '没有可预览内容'}`}
+        >
+          <AppIcon
+            name={attachment.kind === 'image' ? 'image' : 'document'}
+            size={17}
+            color={theme.textSecondary}
+          />
+          <View style={styles.attachmentCopy}>
+            <Text style={styles.attName} numberOfLines={1}>{attachment.name}</Text>
+            <Text style={styles.attachmentStatus} numberOfLines={1}>
+              {details}
+            </Text>
+          </View>
+          {hasParsedText && (
+            <AppIcon name="chevronRight" size={16} color={theme.textSecondary} />
+          )}
+        </MotionPressable>
+        {hasParsedText && (
+          <MotionPressable style={styles.attachmentCopyButton} onPress={copyParsedText} hitSlop={7}>
+            <AppIcon name={copied ? 'check' : 'copy'} size={15} color={theme.textSecondary} />
+          </MotionPressable>
+        )}
+      </View>
+    </View>
+  );
+}
+
+function AttachmentPreviewModal({
+  attachment,
+  onClose,
+}: {
+  attachment: Attachment | null;
+  onClose: () => void;
+}) {
+  const theme = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
+  const mdStyles = useMemo(() => createMdStyles(theme), [theme]);
+  const mdRules = useMemo(() => createMdRules(theme), [theme]);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => setCopied(false), [attachment?.id]);
+
+  async function copyPreview() {
+    if (!attachment?.parsedText) return;
+    await Clipboard.setStringAsync(attachment.parsedText);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1600);
+  }
+
+  const details = attachment
+    ? [
+        formatFileSize(attachment.size),
+        `${attachment.chars ?? attachment.parsedText?.length ?? 0} 字`,
+        'Markdown 解析内容',
+      ].filter(Boolean).join(' · ')
+    : '';
+
+  return (
+    <Modal visible={!!attachment} animationType="slide" onRequestClose={onClose}>
+      <View style={styles.attachmentPreviewScreen}>
+        <View style={styles.attachmentPreviewHeader}>
+          <MotionPressable
+            style={styles.attachmentPreviewClose}
+            onPress={onClose}
+            accessibilityRole="button"
+            accessibilityLabel="关闭文件预览"
+          >
+            <AppIcon name="back" size={25} color={theme.primary} />
+          </MotionPressable>
+          <View style={styles.attachmentPreviewTitleWrap}>
+            <Text style={styles.attachmentPreviewTitle} numberOfLines={1}>
+              {attachment?.name ?? '文件预览'}
+            </Text>
+            <Text style={styles.attachmentPreviewMeta} numberOfLines={1}>{details}</Text>
+          </View>
+          <MotionPressable
+            style={styles.attachmentPreviewCopy}
+            onPress={copyPreview}
+            accessibilityRole="button"
+            accessibilityLabel={copied ? '已复制文件内容' : '复制文件内容'}
+          >
+            <AppIcon name={copied ? 'check' : 'copy'} size={19} color={theme.primary} />
+          </MotionPressable>
+        </View>
+        <ScrollView
+          style={styles.attachmentPreviewScroll}
+          contentContainerStyle={styles.attachmentPreviewContent}
+        >
+          {attachment?.parsedText ? (
+            <Markdown style={mdStyles} rules={mdRules}>
+              {preprocessLatex(attachment.parsedText)}
+            </Markdown>
+          ) : (
+            <Text style={styles.attachmentPreviewEmpty}>没有可预览的解析内容</Text>
+          )}
+        </ScrollView>
+      </View>
+    </Modal>
+  );
+}
+
+function ToolResultPanel({ result }: { result: ToolResult }) {
+  const theme = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
+  const [expanded, setExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const isSearch = result.toolName === 'web_search';
+
+  async function copyResult() {
+    await Clipboard.setStringAsync(result.content);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1600);
+  }
+
+  return (
+    <View style={styles.toolResultPanel}>
+      <View style={styles.toolResultHeader}>
+        <MotionPressable style={styles.toolResultToggle} onPress={() => setExpanded((value) => !value)}>
+          <AppIcon name="search" size={17} color={theme.primary} />
+          <View style={styles.toolResultCopy}>
+            <Text style={styles.toolResultTitle} numberOfLines={1}>
+              {isSearch ? `联网搜索：${result.query || '未命名查询'}` : result.toolName}
+            </Text>
+            <Text style={styles.toolResultMeta}>
+              {result.sources?.length
+                ? `搜索了 ${result.sources.length} 个网页 · ${expanded ? '点击收起' : '详情已折叠'}`
+                : expanded ? '点击收起' : '返回内容已折叠'}
+            </Text>
+          </View>
+          <AppIcon name={expanded ? 'collapse' : 'expand'} size={16} color={theme.textSecondary} />
+        </MotionPressable>
+        <MotionPressable style={styles.toolResultCopyButton} onPress={copyResult} hitSlop={7}>
+          <AppIcon name={copied ? 'check' : 'copy'} size={15} color={theme.primary} />
+        </MotionPressable>
+      </View>
+      {expanded && (
+        <View style={styles.toolResultBody}>
+          {result.sources?.map((source, index) => (
+            <View key={`${source.url}-${index}`} style={styles.sourceCard}>
+              <Text style={styles.sourceIndex}>网页 {index + 1}</Text>
+              <Text
+                style={styles.sourceTitle}
+                onPress={() => Linking.openURL(source.url).catch(() => {})}
+              >
+                {source.title || source.url}
+              </Text>
+              <Text
+                style={styles.sourceUrl}
+                numberOfLines={2}
+                onPress={() => Linking.openURL(source.url).catch(() => {})}
+              >
+                {source.url}
+              </Text>
+              <Text style={styles.sourceContent}>{source.content}</Text>
+            </View>
+          ))}
+          <Text style={styles.toolRawLabel}>返回给模型的内容</Text>
+          <Text selectable style={styles.toolRawText}>{result.content}</Text>
+        </View>
+      )}
     </View>
   );
 }
@@ -561,19 +1605,25 @@ function CodeBlock({ code, lang }: { code: string; lang?: string }) {
     <View style={styles.codeWrap}>
       <View style={styles.codeHeader}>
         <Text style={styles.codeLang}>{lang || 'code'}</Text>
-        <Pressable onPress={copy} hitSlop={8}>
-          <Text style={styles.codeCopy}>{copied ? '✓ 已复制' : '📋 复制'}</Text>
-        </Pressable>
+        <MotionPressable onPress={copy} hitSlop={8} style={styles.codeAction}>
+          <AppIcon name={copied ? 'check' : 'copy'} size={15} color="#7aa2f7" />
+          <Text style={styles.codeCopy}>{copied ? '已复制' : '复制'}</Text>
+        </MotionPressable>
       </View>
       <ScrollView horizontal showsHorizontalScrollIndicator={false}>
         <Text style={styles.codeText}>{shown}</Text>
       </ScrollView>
       {collapsible && (
-        <Pressable style={styles.codeToggle} onPress={() => setExpanded((v) => !v)}>
+        <MotionPressable style={styles.codeToggle} onPress={() => setExpanded((v) => !v)}>
+          <AppIcon
+            name={expanded ? 'collapse' : 'expand'}
+            size={16}
+            color="#7aa2f7"
+          />
           <Text style={styles.codeToggleText}>
-            {expanded ? '▲ 收起' : `▼ 展开全部（${lines.length} 行）`}
+            {expanded ? '收起' : `展开全部（${lines.length} 行）`}
           </Text>
-        </Pressable>
+        </MotionPressable>
       )}
     </View>
   );
@@ -633,12 +1683,22 @@ function createMdRules(theme: ThemeColors) {
       return <CodeBlock key={node.key} code={node.content} lang={lang} />;
     },
     code_block: (node: any) => <CodeBlock key={node.key} code={node.content} />,
-    code_inline: (node: any) => {
+    code_inline: (
+      node: any,
+      _children: any,
+      _parent: any,
+      markdownStyles: any,
+      inheritedStyles: any = {}
+    ) => {
       const c: string = node.content ?? '';
       if (c.startsWith('m:')) {
         return <MathView key={node.key} tex={c.slice(2)} color={theme.textPrimary} />;
       }
-      return null; // 返回 null 让默认样式生效
+      return (
+        <Text key={node.key} style={[inheritedStyles, markdownStyles.code_inline]}>
+          {c}
+        </Text>
+      );
     },
     link: (node: any, children: any) => {
       const href = node.attributes?.href;
@@ -727,13 +1787,19 @@ function createStyles(theme: ThemeColors) {
       alignItems: 'center',
       justifyContent: 'space-between',
       paddingHorizontal: 16,
-      paddingVertical: 12,
+      paddingVertical: 8,
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: theme.border,
       backgroundColor: theme.surface,
     },
-    headerSide: { width: 32 },
-    menuIcon: { fontSize: 22, color: theme.textPrimary },
+    headerSide: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    headerActions: { flexDirection: 'row', alignItems: 'center' },
     headerTitle: {
       flex: 1,
       textAlign: 'center',
@@ -744,17 +1810,121 @@ function createStyles(theme: ThemeColors) {
     },
     banner: { backgroundColor: theme.bannerBg, padding: 10 },
     bannerText: { color: theme.bannerText, textAlign: 'center' },
-    listContent: { padding: 12, flexGrow: 1 },
+    messageArea: { flex: 1, overflow: 'hidden' },
+    backgroundImage: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
+    backgroundVeil: {
+      position: 'absolute', top: 0, right: 0, bottom: 0, left: 0,
+      backgroundColor: theme.background,
+      opacity: 0.7,
+    },
+    topScrollShadow: {
+      position: 'absolute',
+      top: 0,
+      right: 0,
+      left: 0,
+      height: 10,
+      zIndex: 2,
+    },
+    scrollShadowLine: { height: StyleSheet.hairlineWidth, opacity: 0.14 },
+    scrollShadowSoft: { height: 9, opacity: 0.035 },
+    edgeFeedback: {
+      position: 'absolute',
+      right: 36,
+      left: 36,
+      height: 2,
+      borderRadius: 999,
+      zIndex: 4,
+      elevation: 2,
+    },
+    edgeFeedbackTop: { top: 0 },
+    edgeFeedbackBottom: { bottom: 0 },
+    listContent: { padding: 12 },
     empty: { textAlign: 'center', color: theme.textTertiary, marginTop: 40 },
-    bubbleRow: { marginVertical: 4, flexDirection: 'row' },
+    bubbleRow: { marginVertical: 5, flexDirection: 'row', alignItems: 'flex-end', gap: 7 },
     rowLeft: { justifyContent: 'flex-start' },
     rowRight: { justifyContent: 'flex-end' },
-    bubble: { maxWidth: '82%', borderRadius: 14, paddingHorizontal: 12, paddingVertical: 8 },
-    userBubble: { backgroundColor: theme.userBubble },
-    aiBubble: { backgroundColor: theme.aiBubble },
+    messageColumn: { maxWidth: '84%', flexShrink: 1 },
+    messageColumnLeft: { alignItems: 'flex-start' },
+    messageColumnRight: { alignItems: 'flex-end' },
+    assistantAvatarSlot: { alignSelf: 'flex-start', marginTop: 3 },
+    messageAvatar: { width: 30, height: 30, borderRadius: 15, backgroundColor: theme.surfaceVariant },
+    messageAvatarFallback: {
+      width: 30,
+      height: 30,
+      borderRadius: 15,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: theme.primaryLight,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: theme.border,
+    },
+    messageAvatarText: { color: theme.primary, fontSize: 11, fontWeight: '700' },
+    bubble: { maxWidth: '100%', borderRadius: 14, paddingHorizontal: 12, paddingVertical: 8 },
+    bubbleHighlighted: { borderWidth: 2, borderColor: theme.primary },
+    userBubble: { backgroundColor: theme.surfaceVariant, borderBottomRightRadius: 5 },
+    aiBubble: { backgroundColor: 'transparent', paddingHorizontal: 2, paddingVertical: 3 },
+    topicBoundary: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      marginVertical: 16,
+      paddingHorizontal: 4,
+    },
+    topicLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: theme.border },
+    topicLabel: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      borderRadius: 12,
+      paddingHorizontal: 9,
+      paddingVertical: 4,
+      backgroundColor: theme.primaryLight,
+    },
+    topicText: { color: theme.primary, fontSize: 11, fontWeight: '600' },
     bubbleText: { fontSize: 15, lineHeight: 21, color: theme.aiBubbleText },
-    userText: { color: theme.userBubbleText },
+    userText: { color: theme.textPrimary },
+    messageQuoteBar: {
+      minWidth: 0,
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginBottom: 6,
+      paddingHorizontal: 8,
+      paddingVertical: 5,
+      borderRadius: 7,
+      backgroundColor: theme.background,
+    },
+    messageQuoteAccent: {
+      width: 2,
+      height: 16,
+      marginRight: 7,
+      borderRadius: 1,
+      backgroundColor: theme.primary,
+    },
+    messageQuoteText: { flex: 1, minWidth: 0, color: theme.textSecondary, fontSize: 12 },
     bubbleErr: { color: theme.danger, fontSize: 12, marginTop: 4 },
+    answerActions: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      flexWrap: 'wrap',
+      gap: 3,
+      marginTop: 4,
+      paddingHorizontal: 2,
+      maxWidth: '100%',
+    },
+    tokenCount: {
+      fontSize: 11,
+      color: theme.textTertiary,
+      marginRight: 3,
+      fontVariant: ['tabular-nums'],
+    },
+    answerAction: {
+      width: 32,
+      height: 32,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderRadius: 16,
+    },
+    answerActionDisabled: { opacity: 0.45 },
     codeWrap: {
       backgroundColor: theme.codeBg,
       borderRadius: 8,
@@ -771,6 +1941,7 @@ function createStyles(theme: ThemeColors) {
     },
     codeLang: { color: '#9aa4b2', fontSize: 11, fontWeight: '600' },
     codeCopy: { color: '#7aa2f7', fontSize: 12, fontWeight: '600' },
+    codeAction: { flexDirection: 'row', alignItems: 'center', gap: 5 },
     codeText: {
       color: theme.codeText,
       fontFamily: RNPlatform.OS === 'ios' ? 'Menlo' : 'monospace',
@@ -780,10 +1951,13 @@ function createStyles(theme: ThemeColors) {
       paddingVertical: 8,
     },
     codeToggle: {
+      flexDirection: 'row',
       borderTopWidth: StyleSheet.hairlineWidth,
       borderTopColor: '#3a3f4b',
       paddingVertical: 8,
       alignItems: 'center',
+      justifyContent: 'center',
+      gap: 5,
     },
     codeToggleText: { color: '#7aa2f7', fontSize: 13, fontWeight: '600' },
     error: { color: theme.danger, paddingHorizontal: 16, paddingVertical: 4 },
@@ -796,41 +1970,220 @@ function createStyles(theme: ThemeColors) {
       paddingVertical: 6,
       marginBottom: 6,
     },
-    attIcon: { fontSize: 15, marginRight: 6 },
-    attName: { flex: 1, color: '#fff', fontSize: 13 },
-    attMeta: { color: 'rgba(255,255,255,0.75)', fontSize: 11, marginLeft: 6 },
-    pendingBar: {
-      flexDirection: 'row',
-      flexWrap: 'wrap',
-      paddingHorizontal: 8,
-      paddingTop: 6,
+    attIcon: { marginRight: 6 },
+    attName: { flex: 1, color: theme.textPrimary, fontSize: 13 },
+    attMeta: { color: theme.textTertiary, fontSize: 11, marginLeft: 6 },
+    attachmentPanel: {
+      width: 260,
+      maxWidth: '100%',
+      borderRadius: 10,
+      marginBottom: 7,
+      overflow: 'hidden',
+      backgroundColor: theme.surface,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: theme.border,
     },
-    pendChip: {
+    attachmentHeader: { flexDirection: 'row', alignItems: 'stretch' },
+    attachmentToggle: {
+      flex: 1,
+      minWidth: 0,
       flexDirection: 'row',
       alignItems: 'center',
-      backgroundColor: theme.primaryLight,
-      borderRadius: 8,
-      paddingHorizontal: 8,
-      paddingVertical: 5,
-      marginRight: 6,
-      marginBottom: 6,
-      maxWidth: 220,
+      gap: 7,
+      paddingHorizontal: 9,
+      paddingVertical: 8,
     },
-    pendIcon: { fontSize: 13, marginRight: 4 },
-    pendName: { fontSize: 12, color: theme.textPrimary, flexShrink: 1 },
-    pendSpin: { marginLeft: 4, transform: [{ scale: 0.7 }] },
-    pendOk: { color: '#16a34a', fontSize: 12, marginLeft: 4 },
-    pendErr: { color: theme.danger, fontSize: 12, marginLeft: 4 },
-    pendClose: { color: theme.textSecondary, fontSize: 12, marginLeft: 8 },
-    attachBtn: {
+    attachmentCopy: { flex: 1, minWidth: 0 },
+    attachmentStatus: { color: theme.textTertiary, fontSize: 10, marginTop: 2 },
+    attachmentCopyButton: {
+      width: 35,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderLeftWidth: StyleSheet.hairlineWidth,
+      borderLeftColor: theme.border,
+    },
+    attachmentPreviewScreen: { flex: 1, backgroundColor: theme.background },
+    attachmentPreviewHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingTop: RNPlatform.OS === 'android' ? 14 : 50,
+      paddingBottom: 10,
+      paddingHorizontal: 10,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: theme.border,
+      backgroundColor: theme.surface,
+    },
+    attachmentPreviewClose: {
+      width: 40,
+      height: 40,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    attachmentPreviewTitleWrap: { flex: 1, minWidth: 0, paddingHorizontal: 6 },
+    attachmentPreviewTitle: { color: theme.textPrimary, fontSize: 16, fontWeight: '700' },
+    attachmentPreviewMeta: { color: theme.textTertiary, fontSize: 11, marginTop: 2 },
+    attachmentPreviewCopy: {
       width: 40,
       height: 40,
       borderRadius: 20,
       alignItems: 'center',
       justifyContent: 'center',
-      marginRight: 4,
+      backgroundColor: theme.primaryLight,
     },
-    attachIcon: { fontSize: 20 },
+    attachmentPreviewScroll: { flex: 1 },
+    attachmentPreviewContent: { padding: 18, paddingBottom: 40, flexGrow: 1 },
+    attachmentPreviewEmpty: { color: theme.textTertiary, textAlign: 'center', marginTop: 60 },
+    toolResultPanel: {
+      borderWidth: 1,
+      borderColor: theme.border,
+      borderRadius: 10,
+      overflow: 'hidden',
+      marginBottom: 8,
+      backgroundColor: theme.background,
+    },
+    toolResultHeader: { flexDirection: 'row', alignItems: 'stretch' },
+    toolResultToggle: {
+      flex: 1,
+      minWidth: 0,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 7,
+      paddingHorizontal: 9,
+      paddingVertical: 8,
+    },
+    toolResultCopy: { flex: 1, minWidth: 0 },
+    toolResultTitle: { color: theme.textPrimary, fontSize: 12, fontWeight: '700' },
+    toolResultMeta: { color: theme.textTertiary, fontSize: 10, marginTop: 2 },
+    toolResultCopyButton: {
+      width: 35,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderLeftWidth: StyleSheet.hairlineWidth,
+      borderLeftColor: theme.border,
+    },
+    toolResultBody: {
+      padding: 9,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: theme.border,
+      backgroundColor: theme.background,
+    },
+    sourceCard: {
+      borderRadius: 8,
+      padding: 9,
+      marginBottom: 8,
+      backgroundColor: theme.surfaceVariant,
+    },
+    sourceIndex: { color: theme.textTertiary, fontSize: 10, fontWeight: '600' },
+    sourceTitle: { color: theme.primary, fontSize: 12, fontWeight: '700', marginTop: 3 },
+    sourceUrl: { color: theme.textTertiary, fontSize: 10, marginTop: 2 },
+    sourceContent: { color: theme.textPrimary, fontSize: 12, lineHeight: 18, marginTop: 6 },
+    toolRawLabel: { color: theme.textSecondary, fontSize: 11, fontWeight: '700', marginBottom: 5 },
+    toolRawText: {
+      color: theme.textPrimary,
+      fontSize: 11,
+      lineHeight: 17,
+      fontFamily: RNPlatform.OS === 'ios' ? 'Menlo' : 'monospace',
+    },
+    composerShell: {
+      marginHorizontal: 10,
+      marginTop: 6,
+      borderWidth: 1,
+      borderColor: theme.border,
+      borderRadius: 22,
+      overflow: 'hidden',
+      backgroundColor: theme.surface,
+      shadowColor: '#000',
+      shadowOpacity: 0.05,
+      shadowRadius: 8,
+      shadowOffset: { width: 0, height: 2 },
+      elevation: 1,
+    },
+    composerQuoteBar: {
+      minWidth: 0,
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingLeft: 12,
+      paddingRight: 7,
+      paddingTop: 9,
+      paddingBottom: 7,
+    },
+    composerQuoteAccent: {
+      width: 2,
+      height: 18,
+      marginRight: 8,
+      borderRadius: 1,
+      backgroundColor: theme.primary,
+    },
+    composerQuoteText: {
+      flex: 1,
+      minWidth: 0,
+      color: theme.textSecondary,
+      fontSize: 12,
+    },
+    composerQuoteClose: {
+      width: 28,
+      height: 28,
+      flexShrink: 0,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderRadius: 14,
+    },
+    pendingScroll: { maxHeight: 78 },
+    pendingBar: {
+      flexDirection: 'row',
+      gap: 8,
+      paddingHorizontal: 9,
+      paddingTop: 9,
+      paddingBottom: 5,
+    },
+    pendingCard: {
+      width: 222,
+      minHeight: 62,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      padding: 8,
+      borderRadius: 12,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: theme.border,
+      backgroundColor: theme.background,
+    },
+    pendingCardError: {
+      borderColor: theme.danger,
+      backgroundColor: theme.bannerBg,
+    },
+    pendingIconWrap: {
+      width: 38,
+      height: 38,
+      borderRadius: 10,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: theme.primaryLight,
+    },
+    pendingCopy: { flex: 1, minWidth: 0 },
+    pendName: { color: theme.textPrimary, fontSize: 13, fontWeight: '600' },
+    pendingStatusRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3 },
+    pendingStatus: { color: theme.textTertiary, fontSize: 10 },
+    pendingStatusStandalone: { marginTop: 3 },
+    pendSpin: { transform: [{ scale: 0.65 }] },
+    pendErr: { color: theme.danger },
+    pendCloseBtn: {
+      width: 24,
+      height: 24,
+      flexShrink: 0,
+      borderRadius: 12,
+      alignItems: 'center',
+      justifyContent: 'center',
+      alignSelf: 'flex-start',
+    },
+    attachBtn: {
+      width: 38,
+      height: 38,
+      borderRadius: 19,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: 'transparent',
+    },
     menuBackdrop: {
       flex: 1,
       backgroundColor: theme.overlay,
@@ -842,8 +2195,28 @@ function createStyles(theme: ThemeColors) {
       borderTopRightRadius: 16,
       paddingVertical: 8,
       paddingBottom: 28,
+      position: 'relative',
+      zIndex: 1,
+      elevation: 2,
     },
-    menuItem: { paddingVertical: 15, paddingHorizontal: 22 },
+    conversationMenuTitle: {
+      color: theme.textTertiary,
+      fontSize: 12,
+      fontWeight: '600',
+      paddingHorizontal: 22,
+      paddingTop: 8,
+      paddingBottom: 4,
+    },
+    menuItem: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      paddingVertical: 15,
+      paddingHorizontal: 22,
+    },
+    menuItemCopy: { flex: 1 },
+    menuHint: { color: theme.textTertiary, fontSize: 11, lineHeight: 16, marginTop: 2 },
+    menuItemInline: { flexDirection: 'row', alignItems: 'center', gap: 7 },
     menuText: { fontSize: 16, color: theme.textPrimary },
     menuDanger: { color: theme.danger },
     editBackdrop: {
@@ -880,11 +2253,18 @@ function createStyles(theme: ThemeColors) {
       flexDirection: 'row',
       alignItems: 'center',
       paddingHorizontal: 12,
-      paddingVertical: 6,
-      backgroundColor: theme.surface,
-      borderTopWidth: StyleSheet.hairlineWidth,
-      borderTopColor: theme.borderLight,
+      paddingTop: 2,
+      paddingBottom: 7,
+      backgroundColor: theme.background,
     },
+    toolSpacer: { flex: 1 },
+    contextUsage: {
+      color: theme.textTertiary,
+      fontSize: 11,
+      marginLeft: 6,
+      fontVariant: ['tabular-nums'],
+    },
+    contextUsageCompressed: { color: theme.primary, fontWeight: '600' },
     webBtn: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -902,7 +2282,7 @@ function createStyles(theme: ThemeColors) {
     webBtnDisabled: {
       opacity: 0.5,
     },
-    webIcon: { fontSize: 13, marginRight: 4 },
+    webIcon: { marginRight: 4 },
     webText: { fontSize: 12, color: theme.textSecondary },
     webTextActive: { color: theme.primary, fontWeight: '600' },
     searchingBar: {
@@ -916,21 +2296,23 @@ function createStyles(theme: ThemeColors) {
     inputRow: {
       flexDirection: 'row',
       alignItems: 'flex-end',
-      padding: 8,
+      padding: 5,
+      backgroundColor: theme.surface,
+    },
+    inputRowWithAttachments: {
       borderTopWidth: StyleSheet.hairlineWidth,
-      borderTopColor: theme.border,
-      backgroundColor: theme.background,
+      borderTopColor: theme.borderLight,
     },
     modelBtn: {
       flexDirection: 'row',
       alignItems: 'center',
-      maxWidth: 110,
-      height: 40,
-      paddingHorizontal: 10,
-      marginRight: 6,
+      maxWidth: 124,
+      height: 34,
+      paddingHorizontal: 9,
+      marginLeft: 7,
       borderWidth: 1,
       borderColor: theme.border,
-      borderRadius: 20,
+      borderRadius: 17,
       backgroundColor: theme.surfaceVariant,
     },
     modelBtnText: { fontSize: 12, color: theme.textPrimary, flexShrink: 1 },
@@ -939,38 +2321,37 @@ function createStyles(theme: ThemeColors) {
       flex: 1,
       maxHeight: 120,
       minHeight: 40,
-      borderWidth: 1,
-      borderColor: theme.border,
-      borderRadius: 20,
-      paddingHorizontal: 14,
+      borderWidth: 0,
+      paddingHorizontal: 8,
       paddingTop: 10,
       paddingBottom: 10,
       fontSize: 15,
       color: theme.textPrimary,
-      backgroundColor: theme.inputBg,
+      backgroundColor: 'transparent',
     },
     sendBtn: {
-      marginLeft: 8,
+      marginLeft: 4,
       backgroundColor: theme.primary,
-      borderRadius: 20,
-      paddingHorizontal: 18,
-      height: 40,
+      borderRadius: 19,
+      width: 38,
+      height: 38,
+      alignItems: 'center',
       justifyContent: 'center',
     },
-    sendBtnDisabled: { backgroundColor: '#9db9f0' },
+    sendBtnDisabled: { backgroundColor: theme.border },
     stopBtn: { backgroundColor: theme.danger },
-    sendText: { color: '#fff', fontWeight: '600' },
     modalBackdrop: {
       flex: 1,
       backgroundColor: theme.overlay,
-      justifyContent: 'center',
-      padding: 24,
+      justifyContent: 'flex-end',
     },
     modalSheet: {
       backgroundColor: theme.background,
-      borderRadius: 14,
-      paddingVertical: 8,
-      maxHeight: '70%',
+      borderTopLeftRadius: 22,
+      borderTopRightRadius: 22,
+      paddingTop: 10,
+      paddingBottom: 18,
+      maxHeight: '78%',
     },
     modalTitle: {
       fontSize: 13,
@@ -979,15 +2360,56 @@ function createStyles(theme: ThemeColors) {
       paddingVertical: 8,
     },
     modalList: { paddingHorizontal: 4 },
-    groupLabel: {
-      fontSize: 12,
-      fontWeight: '600',
-      color: theme.textSecondary,
-      paddingHorizontal: 12,
-      paddingTop: 10,
-      paddingBottom: 2,
+    providerGroup: {
+      borderWidth: 1,
+      borderColor: theme.border,
+      borderRadius: 12,
+      marginHorizontal: 7,
+      marginBottom: 8,
+      overflow: 'hidden',
+      backgroundColor: theme.surface,
     },
-    groupEmpty: { fontSize: 12, color: theme.textTertiary, paddingHorizontal: 12, paddingBottom: 4 },
+    providerGroupActive: { borderColor: theme.primary },
+    providerHeader: {
+      minHeight: 62,
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 11,
+      gap: 9,
+    },
+    providerMark: {
+      width: 32,
+      height: 32,
+      borderRadius: 9,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: theme.primaryLight,
+    },
+    providerCopy: { flex: 1 },
+    groupLabel: {
+      fontSize: 14,
+      fontWeight: '700',
+      color: theme.textPrimary,
+    },
+    providerMeta: { fontSize: 11, color: theme.textTertiary, marginTop: 3 },
+    protocolPill: {
+      minWidth: 31,
+      borderRadius: 8,
+      paddingHorizontal: 6,
+      paddingVertical: 3,
+      backgroundColor: theme.primaryLight,
+      alignItems: 'center',
+    },
+    protocolPillAnthropic: { backgroundColor: theme.bannerBg },
+    protocolPillText: { color: theme.primary, fontSize: 9, fontWeight: '800' },
+    protocolPillTextAnthropic: { color: theme.bannerText },
+    providerModels: {
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: theme.border,
+      paddingVertical: 4,
+      backgroundColor: theme.background,
+    },
+    groupEmpty: { fontSize: 12, color: theme.textTertiary, padding: 12 },
     modelRow: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -995,6 +2417,7 @@ function createStyles(theme: ThemeColors) {
       paddingVertical: 11,
       paddingHorizontal: 12,
     },
+    modelRowActive: { backgroundColor: theme.primaryLight },
     modelName: { fontSize: 15, color: theme.textPrimary, flex: 1 },
     modelNameActive: { color: theme.primary, fontWeight: '600' },
     modelCheck: { fontSize: 16, color: theme.primary, marginLeft: 8 },
@@ -1005,6 +2428,50 @@ function createStyles(theme: ThemeColors) {
       alignItems: 'center',
     },
     modelManageText: { fontSize: 14, color: theme.primary },
+    searchScreen: { flex: 1 },
+    searchHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      paddingHorizontal: 12,
+      paddingTop: RNPlatform.OS === 'android' ? 14 : 50,
+      paddingBottom: 10,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: theme.border,
+      backgroundColor: theme.surface,
+    },
+    searchBack: { width: 34, height: 40, alignItems: 'center', justifyContent: 'center' },
+    searchInputWrap: {
+      flex: 1,
+      height: 42,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 7,
+      borderRadius: 21,
+      paddingHorizontal: 12,
+      backgroundColor: theme.surfaceVariant,
+    },
+    searchInput: { flex: 1, color: theme.textPrimary, fontSize: 15, paddingVertical: 8 },
+    searchCount: {
+      color: theme.textTertiary,
+      fontSize: 12,
+      paddingHorizontal: 18,
+      paddingVertical: 10,
+    },
+    searchResults: { paddingHorizontal: 12, paddingBottom: 28, flexGrow: 1 },
+    searchResult: {
+      borderRadius: 12,
+      padding: 13,
+      marginBottom: 9,
+      backgroundColor: theme.surfaceVariant,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: theme.border,
+    },
+    searchResultHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
+    searchResultRole: { color: theme.primary, fontSize: 12, fontWeight: '700' },
+    searchResultTime: { color: theme.textTertiary, fontSize: 11 },
+    searchResultText: { color: theme.textPrimary, fontSize: 14, lineHeight: 20 },
+    searchEmpty: { color: theme.textTertiary, textAlign: 'center', marginTop: 52 },
     // 图片大图预览
     previewOverlay: {
       flex: 1,

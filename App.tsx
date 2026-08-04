@@ -1,6 +1,6 @@
 // 入口 —— 初始化 + 聊天/设置两屏切换 + 侧边栏抽屉
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, BackHandler, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { useChatStore } from './src/store';
@@ -20,6 +20,15 @@ export default function App() {
   useEffect(() => {
     init().catch((e) => console.error('init failed', e));
   }, [init]);
+
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (!drawerOpen) return false;
+      setDrawerOpen(false);
+      return true;
+    });
+    return () => subscription.remove();
+  }, [drawerOpen]);
 
   return (
     <SafeAreaProvider>

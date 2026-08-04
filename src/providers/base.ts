@@ -39,6 +39,7 @@ export type ToolExecutor = (
 export interface StreamCallbacks {
   onDelta: (text: string) => void;
   onToolCall?: (name: string, args: any) => void; // 模型决定调用工具时通知 UI
+  onToolResult?: (name: string, args: any, result: string) => void;
   onDone: () => void;
   onError: (err: Error) => void;
 }
@@ -76,16 +77,46 @@ export abstract class BaseProvider {
 // 注意：工具调用过程不落库，所以 history 里不会有 tool 角色消息
 export function buildChatMessages(
   history: Message[],
-  settings: ModelSettings
+  settings: ModelSettings,
+  contextSummary?: string
 ): ChatMessage[] {
   const out: ChatMessage[] = [];
   if (settings.systemPrompt?.trim()) {
     out.push({ role: 'system', content: settings.systemPrompt.trim() });
   }
+  if (contextSummary?.trim()) {
+    out.push({ role: 'system', content: contextSummary.trim() });
+  }
   for (const m of history) {
-    if (m.role === 'system') continue; // system 由设置统一注入
-    if (!m.content) continue;
-    out.push({ role: m.role, content: m.content });
+    if (m.role === 'system' || m.topicBoundary) continue;
+    const content = contentForModel(m);
+    if (!content) continue;
+    out.push({ role: m.role, content });
   }
   return out;
+}
+
+function contentForModel(m: Message): string {
+  const parts: string[] = [];
+  if (m.quote?.content.trim()) {
+    const roleLabel = m.quote.role === 'assistant' ? '助手' : '用户';
+    parts.push(`[引用${roleLabel}消息]\n${m.quote.content.trim()}\n[引用结束]`);
+  }
+
+  if (!m.attachmentContext) {
+    if (!m.attachments?.length) {
+      if (m.content.trim()) parts.push(m.content);
+      return parts.join('\n\n---\n');
+    }
+    const names = m.attachments.map((a) => a.name).join('、');
+    const unavailable =
+      `[附件状态：旧会话未保存附件正文，当前无法读取「${names}」，请让用户重新上传。]`;
+    if (m.content.trim()) parts.push(m.content);
+    parts.push(unavailable);
+    return parts.join('\n\n---\n');
+  }
+  parts.push(m.attachmentContext);
+  if (m.content.trim()) parts.push(m.content);
+  else if (!m.quote) parts.push('请阅读以上文档。');
+  return parts.join('\n\n---\n');
 }
