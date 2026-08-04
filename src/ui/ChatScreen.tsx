@@ -35,6 +35,7 @@ import { MermaidView } from './MermaidView';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
+import { getProviderKey } from '../settings';
 import { AppIcon } from './AppIcon';
 import { BottomSheetModal } from './BottomSheetModal';
 import { MotionPressable } from './MotionPressable';
@@ -123,6 +124,10 @@ export default function ChatScreen({
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [previewAttachment, setPreviewAttachment] = useState<Attachment | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [configuredProviderIds, setConfiguredProviderIds] = useState<Set<string>>(
+    () => new Set()
+  );
+  const [providerKeysLoaded, setProviderKeysLoaded] = useState(false);
   const inputRef = useRef<TextInput>(null);
   const copyFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -143,6 +148,41 @@ export default function ChatScreen({
   useEffect(() => {
     setPendingQuote(null);
   }, [currentSessionId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setProviderKeysLoaded(false);
+
+    Promise.all(
+      providers.map(async (provider) => {
+        try {
+          const key = await getProviderKey(provider.id);
+          return key?.trim() ? provider.id : null;
+        } catch {
+          return null;
+        }
+      })
+    ).then((ids) => {
+      if (cancelled) return;
+      setConfiguredProviderIds(new Set(ids.filter((id): id is string => !!id)));
+      setProviderKeysLoaded(true);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [providers]);
+
+  const selectableProviders = useMemo(
+    () => providers.filter(
+      (provider) => configuredProviderIds.has(provider.id) && provider.models.length > 0
+    ),
+    [configuredProviderIds, providers]
+  );
+  const currentModelSelectable = selectableProviders.some(
+    (provider) =>
+      provider.id === currentProviderId && provider.models.includes(currentModel)
+  );
   const listRef = useRef<FlatList<Message>>(null);
   const nearBottomRef = useRef(true);
   const edgeTranslateY = useRef(new Animated.Value(0)).current;
@@ -898,7 +938,11 @@ export default function ChatScreen({
         </Text>
         <MotionPressable style={styles.modelBtn} onPress={() => setPickerOpen(true)}>
           <Text style={styles.modelBtnText} numberOfLines={1}>
-            {shortModelName(currentModel) || '选模型'}
+            {providerKeysLoaded && currentModelSelectable
+              ? shortModelName(currentModel)
+              : providerKeysLoaded
+                ? '选模型'
+                : '加载中'}
           </Text>
           <AppIcon name="chevronDown" size={14} color={theme.textSecondary} />
         </MotionPressable>
@@ -966,7 +1010,22 @@ export default function ChatScreen({
       >
         <Text style={styles.modalTitle}>选择模型</Text>
         <ScrollView style={styles.modalList}>
-          {providers.map((p) => (
+          {!providerKeysLoaded ? (
+            <View style={styles.modelPickerState}>
+              <ActivityIndicator size="small" color={theme.primary} />
+              <Text style={styles.modelPickerStateTitle}>正在检查服务商配置…</Text>
+            </View>
+          ) : selectableProviders.length === 0 ? (
+            <View style={styles.modelPickerState}>
+              <View style={styles.modelPickerStateIcon}>
+                <AppIcon name="model" size={22} color={theme.textSecondary} />
+              </View>
+              <Text style={styles.modelPickerStateTitle}>暂无可选择的模型</Text>
+              <Text style={styles.modelPickerStateHint}>
+                请先在设置中填写 API Key，并添加或获取至少一个模型
+              </Text>
+            </View>
+          ) : selectableProviders.map((p) => (
             <View
               key={p.id}
               style={[
@@ -1007,9 +1066,6 @@ export default function ChatScreen({
               </MotionPressable>
               {expandedProviders.has(p.id) && (
                 <View style={styles.providerModels}>
-                  {p.models.length === 0 && (
-                    <Text style={styles.groupEmpty}>还没有模型，请到服务商设置中添加</Text>
-                  )}
                   {p.models.map((m) => {
                     const active = m === currentModel && p.id === currentProviderId;
                     return (
@@ -2519,6 +2575,35 @@ function createStyles(theme: ThemeColors) {
       paddingVertical: 8,
     },
     modalList: { paddingHorizontal: 4 },
+    modelPickerState: {
+      minHeight: 150,
+      paddingHorizontal: 28,
+      paddingVertical: 28,
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+    },
+    modelPickerStateIcon: {
+      width: 44,
+      height: 44,
+      borderRadius: 14,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: theme.surfaceVariant,
+      marginBottom: 2,
+    },
+    modelPickerStateTitle: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: theme.textSecondary,
+      textAlign: 'center',
+    },
+    modelPickerStateHint: {
+      fontSize: 12,
+      lineHeight: 18,
+      color: theme.textTertiary,
+      textAlign: 'center',
+    },
     providerGroup: {
       borderWidth: 1,
       borderColor: theme.border,
@@ -2568,7 +2653,6 @@ function createStyles(theme: ThemeColors) {
       paddingVertical: 4,
       backgroundColor: theme.background,
     },
-    groupEmpty: { fontSize: 12, color: theme.textTertiary, padding: 12 },
     modelRow: {
       flexDirection: 'row',
       alignItems: 'center',
