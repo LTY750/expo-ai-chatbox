@@ -62,12 +62,16 @@ export interface Message {
 }
 
 // 模型参数（发给 Provider 的有效设置，运行时由全局参数 + 当前模型拼成）
+export type ReasoningEffort = 'auto' | 'low' | 'medium' | 'high';
+
 export interface ModelSettings {
   model: string;
   temperature?: number;
   topP?: number;
   maxTokens?: number;
   systemPrompt?: string;
+  // 会话级思考深度；auto 表示不向 Provider 注入额外推理参数
+  reasoningEffort?: ReasoningEffort;
 }
 
 export interface ConversationSettings {

@@ -21,7 +21,13 @@ import {
   View,
 } from 'react-native';
 import { useChatStore, type PendingAttachment } from '../store';
-import type { Attachment, Message, MessageQuote, ToolResult } from '../types';
+import type {
+  Attachment,
+  Message,
+  MessageQuote,
+  ReasoningEffort,
+  ToolResult,
+} from '../types';
 import { useTheme, darkTheme, type ThemeColors } from '../theme';
 import Markdown from 'react-native-markdown-display';
 import { MathView } from './MathView';
@@ -38,6 +44,18 @@ import {
   modelContextKey,
   prepareContext,
 } from '../context';
+
+const REASONING_OPTIONS: Array<{
+  value: ReasoningEffort;
+  label: string;
+  shortLabel: string;
+  description: string;
+}> = [
+  { value: 'auto', label: '自动', shortLabel: '自动', description: '不额外指定，由当前模型决定' },
+  { value: 'low', label: '低', shortLabel: '低', description: '更快响应，适合简单问题' },
+  { value: 'medium', label: '中', shortLabel: '中', description: '平衡响应速度与推理质量' },
+  { value: 'high', label: '高', shortLabel: '高', description: '更充分推理，可能消耗更多时间和 tokens' },
+];
 
 export default function ChatScreen({
   onOpenDrawer,
@@ -77,6 +95,9 @@ export default function ChatScreen({
 
   const currentSession = sessions.find((x) => x.id === currentSessionId) ?? null;
   const title = currentSession?.title ?? 'Chatbox';
+  const reasoningEffort = currentSession?.settingsOverride?.reasoningEffort ?? 'auto';
+  const reasoningOption = REASONING_OPTIONS.find((option) => option.value === reasoningEffort)
+    ?? REASONING_OPTIONS[0];
 
   const [input, setInput] = useState('');
   const [err, setErr] = useState<string | null>(null);
@@ -87,6 +108,7 @@ export default function ChatScreen({
   const [attachMenu, setAttachMenu] = useState(false);
   const [conversationMenu, setConversationMenu] = useState(false);
   const [conversationSettingsOpen, setConversationSettingsOpen] = useState(false);
+  const [reasoningOpen, setReasoningOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
@@ -415,6 +437,16 @@ export default function ChatScreen({
     try {
       const sessionId = await ensureConversation();
       await updateConversationSettings(sessionId, {}, { autoCompressContext: enabled });
+    } catch (error: any) {
+      setErr(error?.message ?? String(error));
+    }
+  }
+
+  async function selectReasoningEffort(value: ReasoningEffort) {
+    try {
+      const sessionId = await ensureConversation();
+      await updateConversationSettings(sessionId, { reasoningEffort: value }, {});
+      setReasoningOpen(false);
     } catch (error: any) {
       setErr(error?.message ?? String(error));
     }
@@ -821,6 +853,29 @@ export default function ChatScreen({
             联网搜索
           </Text>
         </MotionPressable>
+        <MotionPressable
+          style={[
+            styles.reasoningBtn,
+            reasoningEffort !== 'auto' && styles.reasoningBtnActive,
+            isStreaming && styles.webBtnDisabled,
+          ]}
+          onPress={() => setReasoningOpen(true)}
+          disabled={isStreaming}
+          accessibilityLabel={`思考深度：${reasoningOption.label}`}
+        >
+          <AppIcon
+            name="brain"
+            size={14}
+            color={reasoningEffort === 'auto' ? theme.textSecondary : theme.primary}
+            style={styles.reasoningIcon}
+          />
+          <Text style={[
+            styles.reasoningText,
+            reasoningEffort !== 'auto' && styles.reasoningTextActive,
+          ]}>
+            {reasoningOption.shortLabel}
+          </Text>
+        </MotionPressable>
         {searching && (
           <View style={styles.searchingBar}>
             <ActivityIndicator size="small" color={theme.textSecondary} />
@@ -868,6 +923,47 @@ export default function ChatScreen({
             </MotionPressable>
           </View>
         </Pressable>
+      </Modal>
+
+      <Modal
+        visible={reasoningOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setReasoningOpen(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setReasoningOpen(false)} />
+          <View style={styles.reasoningSheet}>
+            <View style={styles.reasoningHeader}>
+              <View style={styles.reasoningHeaderIcon}>
+                <AppIcon name="brain" size={18} color={theme.primary} />
+              </View>
+              <View style={styles.reasoningHeaderCopy}>
+                <Text style={styles.reasoningTitle}>思考深度</Text>
+                <Text style={styles.reasoningSubtitle}>支持范围由模型服务商决定，不支持时请选择自动</Text>
+              </View>
+            </View>
+            {REASONING_OPTIONS.map((option) => {
+              const active = option.value === reasoningEffort;
+              return (
+                <MotionPressable
+                  key={option.value}
+                  style={[styles.reasoningOption, active && styles.reasoningOptionActive]}
+                  onPress={() => selectReasoningEffort(option.value)}
+                  accessibilityLabel={`设置思考深度为${option.label}`}
+                >
+                  <View style={styles.reasoningOptionCopy}>
+                    <Text style={[styles.reasoningOptionLabel, active && styles.reasoningOptionLabelActive]}>
+                      {option.label}
+                    </Text>
+                    <Text style={styles.reasoningOptionDescription}>{option.description}</Text>
+                  </View>
+                  {active && <AppIcon name="check" size={20} color={theme.primary} />}
+                </MotionPressable>
+              );
+            })}
+          </View>
+        </View>
       </Modal>
 
       <Modal
@@ -2305,6 +2401,65 @@ function createStyles(theme: ThemeColors) {
     webIcon: { marginRight: 4 },
     webText: { fontSize: 12, color: theme.textSecondary },
     webTextActive: { color: theme.primary, fontWeight: '600' },
+    reasoningBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      minHeight: 30,
+      marginLeft: 6,
+      paddingHorizontal: 8,
+      paddingVertical: 5,
+      borderRadius: 15,
+      borderWidth: 1,
+      borderColor: theme.border,
+      backgroundColor: theme.background,
+    },
+    reasoningBtnActive: {
+      borderColor: theme.primary,
+      backgroundColor: theme.primaryLight,
+    },
+    reasoningIcon: { marginRight: 4 },
+    reasoningText: { fontSize: 11, color: theme.textSecondary },
+    reasoningTextActive: { color: theme.primary, fontWeight: '600' },
+    reasoningSheet: {
+      backgroundColor: theme.background,
+      borderTopLeftRadius: 22,
+      borderTopRightRadius: 22,
+      paddingHorizontal: 12,
+      paddingTop: 14,
+      paddingBottom: 24,
+    },
+    reasoningHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 8,
+      paddingBottom: 12,
+    },
+    reasoningHeaderIcon: {
+      width: 38,
+      height: 38,
+      borderRadius: 12,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: theme.primaryLight,
+      marginRight: 10,
+    },
+    reasoningHeaderCopy: { flex: 1 },
+    reasoningTitle: { color: theme.textPrimary, fontSize: 17, fontWeight: '700' },
+    reasoningSubtitle: { color: theme.textTertiary, fontSize: 11, marginTop: 2 },
+    reasoningOption: {
+      minHeight: 62,
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 14,
+      paddingVertical: 9,
+      borderRadius: 14,
+      marginVertical: 2,
+    },
+    reasoningOptionActive: { backgroundColor: theme.primaryLight },
+    reasoningOptionCopy: { flex: 1 },
+    reasoningOptionLabel: { color: theme.textPrimary, fontSize: 15, fontWeight: '600' },
+    reasoningOptionLabelActive: { color: theme.primary },
+    reasoningOptionDescription: { color: theme.textTertiary, fontSize: 12, marginTop: 3 },
     searchingBar: {
       flexDirection: 'row',
       alignItems: 'center',

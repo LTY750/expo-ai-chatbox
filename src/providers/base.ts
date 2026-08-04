@@ -18,6 +18,8 @@ export interface ChatMessage {
   content: string;
   toolCalls?: ToolCall[]; // 仅 assistant，模型发起的工具调用
   toolCallId?: string; // 仅 tool 角色，对应哪次调用
+  // Anthropic 扩展思考开启时，工具循环必须原样回传 thinking/signature 内容块
+  anthropicContent?: Array<Record<string, any>>;
 }
 
 // 工具定义（统一内部格式，各 Provider 负责转成自家协议格式）

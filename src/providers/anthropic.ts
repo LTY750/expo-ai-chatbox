@@ -17,6 +17,7 @@ const ANTHROPIC_VERSION = '2023-06-01';
 interface ParseResult {
   text: string;
   toolCalls: ToolCall[];
+  contentBlocks: Array<Record<string, any>>;
 }
 
 export class AnthropicProvider extends BaseProvider {
@@ -58,10 +59,8 @@ export class AnthropicProvider extends BaseProvider {
           model: settings.model,
           messages: this.toAnthropicMessages(msgs),
           stream: true,
-          temperature: settings.temperature,
-          top_p: settings.topP,
-          max_tokens: settings.maxTokens ?? 4096, // Anthropic 必填
         };
+        this.applyGenerationSettings(body, settings);
         if (system) body.system = system;
         const allowTools = canUseTools && toolCallCount < MAX_TOOL_CALLS;
         if (allowTools) {
@@ -85,7 +84,7 @@ export class AnthropicProvider extends BaseProvider {
         }
         if (!res.body) throw new Error('响应没有 body，无法流式读取');
 
-        const { text, toolCalls } = await this.parseSSE(res.body, cb);
+        const { text, toolCalls, contentBlocks } = await this.parseSSE(res.body, cb);
 
         // 没有工具调用，或不允许再调工具 → 本轮结束
         if (!toolCalls.length || !allowTools) {
@@ -98,6 +97,7 @@ export class AnthropicProvider extends BaseProvider {
           role: 'assistant',
           content: text,
           toolCalls,
+          anthropicContent: contentBlocks,
         });
         // 执行所有工具，收集结果
         const toolResults: Array<{ id: string; content: string }> = [];
@@ -137,18 +137,16 @@ export class AnthropicProvider extends BaseProvider {
   async complete(opts: ChatOptions): Promise<string> {
     const { messages, settings, apiKey, signal } = opts;
     const { system, msgs } = this.split(messages);
+    const body = this.applyGenerationSettings({
+      model: settings.model,
+      messages: this.toAnthropicMessages(msgs),
+      stream: false,
+    }, settings);
+    if (system) body.system = system;
     const res = await expoFetch(`${this.baseURL}/v1/messages`, {
       method: 'POST',
       headers: this.headers(apiKey),
-      body: JSON.stringify({
-        model: settings.model,
-        messages: this.toAnthropicMessages(msgs),
-        system,
-        stream: false,
-        temperature: settings.temperature,
-        top_p: settings.topP,
-        max_tokens: settings.maxTokens ?? 1024,
-      }),
+      body: JSON.stringify(body),
       signal,
     });
     if (!res.ok) {
@@ -175,6 +173,26 @@ export class AnthropicProvider extends BaseProvider {
       .map((m: any) => m?.id)
       .filter((x: any): x is string => typeof x === 'string')
       .sort();
+  }
+
+  private applyGenerationSettings(body: any, settings: ChatOptions['settings']): any {
+    const budgetByEffort = {
+      low: 1024,
+      medium: 2048,
+      high: 4096,
+    } as const;
+    const effort = settings.reasoningEffort;
+    if (effort && effort !== 'auto') {
+      const budgetTokens = budgetByEffort[effort];
+      body.thinking = { type: 'enabled', budget_tokens: budgetTokens };
+      // Anthropic 的 max_tokens 包含思考预算，并且必须高于 budget_tokens。
+      body.max_tokens = Math.max(settings.maxTokens ?? 4096, budgetTokens + 1024);
+    } else {
+      body.temperature = settings.temperature;
+      body.top_p = settings.topP;
+      body.max_tokens = settings.maxTokens ?? 4096;
+    }
+    return body;
   }
 
   // 把统一 ChatMessage[] 转成 Anthropic 协议格式
@@ -204,6 +222,11 @@ export class AnthropicProvider extends BaseProvider {
         continue;
       }
       if (m.role === 'assistant' && m.toolCalls?.length) {
+        if (m.anthropicContent?.length) {
+          out.push({ role: 'assistant', content: m.anthropicContent });
+          i++;
+          continue;
+        }
         const content: any[] = [];
         if (m.content) content.push({ type: 'text', text: m.content });
         for (const tc of m.toolCalls) {
@@ -242,6 +265,10 @@ export class AnthropicProvider extends BaseProvider {
         toolUseId?: string;
         toolName?: string;
         toolInput?: string;
+        text?: string;
+        thinking?: string;
+        signature?: string;
+        raw?: Record<string, any>;
       }
     > = new Map();
     const toolCalls: ToolCall[] = [];
@@ -269,6 +296,10 @@ export class AnthropicProvider extends BaseProvider {
               toolUseId: block?.id,
               toolName: block?.name,
               toolInput: '',
+              text: block?.text ?? '',
+              thinking: block?.thinking ?? '',
+              signature: block?.signature ?? '',
+              raw: block,
             });
           } else if (json?.type === 'content_block_delta') {
             const idx = typeof json.index === 'number' ? json.index : 0;
@@ -277,7 +308,18 @@ export class AnthropicProvider extends BaseProvider {
             const delta = json.delta;
             if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
               text += delta.text;
+              block.text = (block.text ?? '') + delta.text;
               cb.onDelta(delta.text);
+            } else if (
+              delta?.type === 'thinking_delta' &&
+              typeof delta.thinking === 'string'
+            ) {
+              block.thinking = (block.thinking ?? '') + delta.thinking;
+            } else if (
+              delta?.type === 'signature_delta' &&
+              typeof delta.signature === 'string'
+            ) {
+              block.signature = (block.signature ?? '') + delta.signature;
             } else if (
               delta?.type === 'input_json_delta' &&
               typeof delta.partial_json === 'string'
@@ -300,6 +342,35 @@ export class AnthropicProvider extends BaseProvider {
         }
       }
     }
-    return { text, toolCalls };
+    const contentBlocks = Array.from(blocks.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([, block]) => {
+        if (block.type === 'thinking') {
+          return {
+            type: 'thinking',
+            thinking: block.thinking ?? '',
+            ...(block.signature ? { signature: block.signature } : {}),
+          };
+        }
+        if (block.type === 'redacted_thinking') {
+          return block.raw ?? { type: 'redacted_thinking' };
+        }
+        if (block.type === 'tool_use') {
+          let input: any = {};
+          try {
+            input = JSON.parse(block.toolInput || '{}');
+          } catch {
+            // 参数分片异常时保持空对象，与 ToolCall 的兼容行为一致
+          }
+          return {
+            type: 'tool_use',
+            id: block.toolUseId ?? '',
+            name: block.toolName ?? '',
+            input,
+          };
+        }
+        return { type: 'text', text: block.text ?? '' };
+      });
+    return { text, toolCalls, contentBlocks };
   }
 }

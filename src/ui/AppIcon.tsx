@@ -1,4 +1,5 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
+import FontAwesome5 from '@expo/vector-icons/FontAwesome5';
 import type { ComponentProps } from 'react';
 import type { StyleProp, TextStyle } from 'react-native';
 
@@ -19,6 +20,7 @@ export type AppIconName =
   | 'prompt'
   | 'model'
   | 'generation'
+  | 'brain'
   | 'copy'
   | 'quote'
   | 'edit'
@@ -33,7 +35,7 @@ export type AppIconName =
 
 type IoniconName = ComponentProps<typeof Ionicons>['name'];
 
-const ICONS: Record<AppIconName, IoniconName> = {
+const ICONS: Record<Exclude<AppIconName, 'brain'>, IoniconName> = {
   menu: 'menu-outline',
   settings: 'settings-outline',
   add: 'add-outline',
@@ -74,5 +76,8 @@ export function AppIcon({
   color?: string;
   style?: StyleProp<TextStyle>;
 }) {
+  if (name === 'brain') {
+    return <FontAwesome5 name="brain" size={size} color={color} style={style} solid />;
+  }
   return <Ionicons name={ICONS[name]} size={size} color={color} style={style} />;
 }

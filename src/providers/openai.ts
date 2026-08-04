@@ -33,10 +33,9 @@ export class OpenAICompatProvider extends BaseProvider {
           model: settings.model,
           messages: this.toOpenAIMessages(currentMessages),
           stream: true,
-          temperature: settings.temperature,
-          top_p: settings.topP,
           max_tokens: settings.maxTokens,
         };
+        this.applyGenerationSettings(body, settings);
         // 达到工具调用上限后，本轮不再传 tools，让模型基于已有结果总结
         const allowTools = canUseTools && toolCallCount < MAX_TOOL_CALLS;
         if (allowTools) {
@@ -117,14 +116,12 @@ export class OpenAICompatProvider extends BaseProvider {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
       },
-      body: JSON.stringify({
+      body: JSON.stringify(this.applyGenerationSettings({
         model: settings.model,
         messages: this.toOpenAIMessages(messages),
         stream: false,
-        temperature: settings.temperature,
-        top_p: settings.topP,
         max_tokens: settings.maxTokens,
-      }),
+      }, settings)),
       signal,
     });
     if (!res.ok) {
@@ -178,6 +175,18 @@ export class OpenAICompatProvider extends BaseProvider {
       }
       return { role: m.role, content: m.content };
     });
+  }
+
+  private applyGenerationSettings(body: any, settings: ChatOptions['settings']): any {
+    const effort = settings.reasoningEffort;
+    if (effort && effort !== 'auto') {
+      // 推理模型通常不接受 temperature / top_p；选择具体档位时只传推理强度。
+      body.reasoning_effort = effort;
+    } else {
+      body.temperature = settings.temperature;
+      body.top_p = settings.topP;
+    }
+    return body;
   }
 
   // 解析 OpenAI 风格 SSE：data: {...}\n\n，结束标志 data: [DONE]
