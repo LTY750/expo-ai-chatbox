@@ -36,7 +36,9 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
 import { AppIcon } from './AppIcon';
+import { BottomSheetModal } from './BottomSheetModal';
 import { MotionPressable } from './MotionPressable';
+import { MOTION_DURATION, MOTION_EASING } from './motion';
 import ConversationSettingsModal from './ConversationSettingsModal';
 import {
   DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS,
@@ -124,6 +126,7 @@ export default function ChatScreen({
   const inputRef = useRef<TextInput>(null);
   const copyFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const openSettingsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 注册图片预览回调（供 MarkdownImage 调用）
   useEffect(() => {
@@ -134,6 +137,7 @@ export default function ChatScreen({
   useEffect(() => () => {
     if (copyFeedbackTimerRef.current) clearTimeout(copyFeedbackTimerRef.current);
     if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    if (openSettingsTimerRef.current) clearTimeout(openSettingsTimerRef.current);
   }, []);
 
   useEffect(() => {
@@ -905,207 +909,186 @@ export default function ChatScreen({
         </MotionPressable>
       )}
 
-      <Modal
+      <BottomSheetModal
         visible={attachMenu}
-        transparent
-        animationType="fade"
         onRequestClose={() => setAttachMenu(false)}
+        sheetStyle={styles.menuSheet}
       >
-        <Pressable style={styles.menuBackdrop} onPress={() => setAttachMenu(false)}>
-          <View style={styles.menuSheet}>
-            <MotionPressable style={styles.menuItem} onPress={pickDocument}>
-              <AppIcon name="document" size={21} color={theme.primary} />
-              <Text style={styles.menuText}>选择文件（txt / md / csv）</Text>
-            </MotionPressable>
-            <MotionPressable style={styles.menuItem} onPress={pickImage}>
-              <AppIcon name="image" size={21} color={theme.primary} />
-              <Text style={styles.menuText}>选择图片（OCR 识别）</Text>
-            </MotionPressable>
-          </View>
-        </Pressable>
-      </Modal>
+        <MotionPressable style={styles.menuItem} onPress={pickDocument}>
+          <AppIcon name="document" size={21} color={theme.primary} />
+          <Text style={styles.menuText}>选择文件（txt / md / csv）</Text>
+        </MotionPressable>
+        <MotionPressable style={styles.menuItem} onPress={pickImage}>
+          <AppIcon name="image" size={21} color={theme.primary} />
+          <Text style={styles.menuText}>选择图片（OCR 识别）</Text>
+        </MotionPressable>
+      </BottomSheetModal>
 
-      <Modal
+      <BottomSheetModal
         visible={reasoningOpen}
-        transparent
-        animationType="fade"
         onRequestClose={() => setReasoningOpen(false)}
+        sheetStyle={styles.reasoningSheet}
       >
-        <View style={styles.modalBackdrop}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setReasoningOpen(false)} />
-          <View style={styles.reasoningSheet}>
-            <View style={styles.reasoningHeader}>
-              <View style={styles.reasoningHeaderIcon}>
-                <AppIcon name="brain" size={18} color={theme.primary} />
-              </View>
-              <View style={styles.reasoningHeaderCopy}>
-                <Text style={styles.reasoningTitle}>思考深度</Text>
-                <Text style={styles.reasoningSubtitle}>支持范围由模型服务商决定，不支持时请选择自动</Text>
-              </View>
-            </View>
-            {REASONING_OPTIONS.map((option) => {
-              const active = option.value === reasoningEffort;
-              return (
-                <MotionPressable
-                  key={option.value}
-                  style={[styles.reasoningOption, active && styles.reasoningOptionActive]}
-                  onPress={() => selectReasoningEffort(option.value)}
-                  accessibilityLabel={`设置思考深度为${option.label}`}
-                >
-                  <View style={styles.reasoningOptionCopy}>
-                    <Text style={[styles.reasoningOptionLabel, active && styles.reasoningOptionLabelActive]}>
-                      {option.label}
-                    </Text>
-                    <Text style={styles.reasoningOptionDescription}>{option.description}</Text>
-                  </View>
-                  {active && <AppIcon name="check" size={20} color={theme.primary} />}
-                </MotionPressable>
-              );
-            })}
+        <View style={styles.reasoningHeader}>
+          <View style={styles.reasoningHeaderIcon}>
+            <AppIcon name="brain" size={18} color={theme.primary} />
+          </View>
+          <View style={styles.reasoningHeaderCopy}>
+            <Text style={styles.reasoningTitle}>思考深度</Text>
+            <Text style={styles.reasoningSubtitle}>支持范围由模型服务商决定，不支持时请选择自动</Text>
           </View>
         </View>
-      </Modal>
-
-      <Modal
-        visible={pickerOpen}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setPickerOpen(false)}
-      >
-        <Pressable style={styles.modalBackdrop} onPress={() => setPickerOpen(false)}>
-          <View style={styles.modalSheet}>
-            <Text style={styles.modalTitle}>选择模型</Text>
-            <ScrollView style={styles.modalList}>
-              {providers.map((p) => (
-                <View
-                  key={p.id}
-                  style={[
-                    styles.providerGroup,
-                    p.id === currentProviderId && styles.providerGroupActive,
-                  ]}
-                >
-                  <MotionPressable
-                    style={styles.providerHeader}
-                    onPress={() => toggleProvider(p.id)}
-                    accessibilityLabel={`${expandedProviders.has(p.id) ? '折叠' : '展开'} ${p.name}`}
-                  >
-                    <View style={styles.providerMark}>
-                      <AppIcon name="model" size={18} color={theme.primary} />
-                    </View>
-                    <View style={styles.providerCopy}>
-                      <Text style={styles.groupLabel} numberOfLines={1}>{p.name}</Text>
-                      <Text style={styles.providerMeta}>
-                        {p.type === 'anthropic' ? 'Anthropic 原生' : 'OpenAI 兼容'} · {p.models.length} 个模型
-                      </Text>
-                    </View>
-                    <View style={[
-                      styles.protocolPill,
-                      p.type === 'anthropic' && styles.protocolPillAnthropic,
-                    ]}>
-                      <Text style={[
-                        styles.protocolPillText,
-                        p.type === 'anthropic' && styles.protocolPillTextAnthropic,
-                      ]}>
-                        {p.type === 'anthropic' ? 'A' : 'OAI'}
-                      </Text>
-                    </View>
-                    <AppIcon
-                      name={expandedProviders.has(p.id) ? 'collapse' : 'expand'}
-                      size={16}
-                      color={theme.textSecondary}
-                    />
-                  </MotionPressable>
-                  {expandedProviders.has(p.id) && (
-                    <View style={styles.providerModels}>
-                      {p.models.length === 0 && (
-                        <Text style={styles.groupEmpty}>还没有模型，请到服务商设置中添加</Text>
-                      )}
-                      {p.models.map((m) => {
-                        const active = m === currentModel && p.id === currentProviderId;
-                        return (
-                          <MotionPressable
-                            key={p.id + m}
-                            style={[styles.modelRow, active && styles.modelRowActive]}
-                            onPress={() => {
-                              selectModel(p.id, m);
-                              setPickerOpen(false);
-                            }}
-                          >
-                            <Text style={[styles.modelName, active && styles.modelNameActive]}>
-                              {m}
-                            </Text>
-                            {active && <AppIcon name="check" size={18} color={theme.primary} />}
-                          </MotionPressable>
-                        );
-                      })}
-                    </View>
-                  )}
-                </View>
-              ))}
-            </ScrollView>
+        {REASONING_OPTIONS.map((option) => {
+          const active = option.value === reasoningEffort;
+          return (
             <MotionPressable
-              style={styles.modelManage}
-              onPress={() => {
-                setPickerOpen(false);
-                onOpenSettings();
-              }}
+              key={option.value}
+              style={[styles.reasoningOption, active && styles.reasoningOptionActive]}
+              onPress={() => selectReasoningEffort(option.value)}
+              accessibilityLabel={`设置思考深度为${option.label}`}
             >
-              <View style={styles.menuItemInline}>
-                <AppIcon name="settings" size={18} color={theme.primary} />
-                <Text style={styles.modelManageText}>管理服务商和模型</Text>
-              </View>
-            </MotionPressable>
-          </View>
-        </Pressable>
-      </Modal>
-
-      <Modal
-        visible={conversationMenu}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setConversationMenu(false)}
-      >
-        <View style={styles.menuBackdrop}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setConversationMenu(false)} />
-          <View style={styles.menuSheet}>
-            <Text style={styles.conversationMenuTitle}>当前对话</Text>
-            <MotionPressable
-              style={[styles.menuItem, isStreaming && styles.answerActionDisabled]}
-              onPress={handleInsertTopic}
-              disabled={isStreaming}
-            >
-              <AppIcon name="add" size={21} color={theme.primary} />
-              <View style={styles.menuItemCopy}>
-                <Text style={styles.menuText}>插入新话题</Text>
-                <Text style={styles.menuHint}>留在当前对话，只从这里开始新的模型上下文</Text>
-              </View>
-            </MotionPressable>
-            <MotionPressable style={styles.menuItem} onPress={openConversationSettings}>
-              <AppIcon name="settings" size={20} color={theme.primary} />
-              <View style={styles.menuItemCopy}>
-                <Text style={styles.menuText}>对话设置</Text>
-                <Text style={styles.menuHint}>头像、参数、背景图片和系统提示词</Text>
-              </View>
-              <AppIcon name="chevronRight" size={18} color={theme.textTertiary} />
-            </MotionPressable>
-            <View style={styles.menuItem}>
-              <AppIcon name="generation" size={20} color={theme.primary} />
-              <View style={styles.menuItemCopy}>
-                <Text style={styles.menuText}>自动压缩上下文</Text>
-                <Text style={styles.menuHint}>
-                  {contextInfo.compressed ? '当前已压缩，完整聊天记录不会删除' : '超过约 12k tokens 时自动压缩旧内容'}
+              <View style={styles.reasoningOptionCopy}>
+                <Text style={[styles.reasoningOptionLabel, active && styles.reasoningOptionLabelActive]}>
+                  {option.label}
                 </Text>
+                <Text style={styles.reasoningOptionDescription}>{option.description}</Text>
               </View>
-              <Switch
-                value={!!currentSession?.conversationSettings?.autoCompressContext}
-                onValueChange={setAutoCompress}
-                trackColor={{ false: theme.border, true: theme.primary }}
-                disabled={isStreaming}
-              />
+              {active && <AppIcon name="check" size={20} color={theme.primary} />}
+            </MotionPressable>
+          );
+        })}
+      </BottomSheetModal>
+
+      <BottomSheetModal
+        visible={pickerOpen}
+        onRequestClose={() => setPickerOpen(false)}
+        sheetStyle={styles.modalSheet}
+      >
+        <Text style={styles.modalTitle}>选择模型</Text>
+        <ScrollView style={styles.modalList}>
+          {providers.map((p) => (
+            <View
+              key={p.id}
+              style={[
+                styles.providerGroup,
+                p.id === currentProviderId && styles.providerGroupActive,
+              ]}
+            >
+              <MotionPressable
+                style={styles.providerHeader}
+                onPress={() => toggleProvider(p.id)}
+                accessibilityLabel={`${expandedProviders.has(p.id) ? '折叠' : '展开'} ${p.name}`}
+              >
+                <View style={styles.providerMark}>
+                  <AppIcon name="model" size={18} color={theme.primary} />
+                </View>
+                <View style={styles.providerCopy}>
+                  <Text style={styles.groupLabel} numberOfLines={1}>{p.name}</Text>
+                  <Text style={styles.providerMeta}>
+                    {p.type === 'anthropic' ? 'Anthropic 原生' : 'OpenAI 兼容'} · {p.models.length} 个模型
+                  </Text>
+                </View>
+                <View style={[
+                  styles.protocolPill,
+                  p.type === 'anthropic' && styles.protocolPillAnthropic,
+                ]}>
+                  <Text style={[
+                    styles.protocolPillText,
+                    p.type === 'anthropic' && styles.protocolPillTextAnthropic,
+                  ]}>
+                    {p.type === 'anthropic' ? 'A' : 'OAI'}
+                  </Text>
+                </View>
+                <AppIcon
+                  name={expandedProviders.has(p.id) ? 'collapse' : 'expand'}
+                  size={16}
+                  color={theme.textSecondary}
+                />
+              </MotionPressable>
+              {expandedProviders.has(p.id) && (
+                <View style={styles.providerModels}>
+                  {p.models.length === 0 && (
+                    <Text style={styles.groupEmpty}>还没有模型，请到服务商设置中添加</Text>
+                  )}
+                  {p.models.map((m) => {
+                    const active = m === currentModel && p.id === currentProviderId;
+                    return (
+                      <MotionPressable
+                        key={p.id + m}
+                        style={[styles.modelRow, active && styles.modelRowActive]}
+                        onPress={() => {
+                          selectModel(p.id, m);
+                          setPickerOpen(false);
+                        }}
+                      >
+                        <Text style={[styles.modelName, active && styles.modelNameActive]}>
+                          {m}
+                        </Text>
+                        {active && <AppIcon name="check" size={18} color={theme.primary} />}
+                      </MotionPressable>
+                    );
+                  })}
+                </View>
+              )}
             </View>
+          ))}
+        </ScrollView>
+        <MotionPressable
+          style={styles.modelManage}
+          onPress={() => {
+            setPickerOpen(false);
+            if (openSettingsTimerRef.current) clearTimeout(openSettingsTimerRef.current);
+            openSettingsTimerRef.current = setTimeout(onOpenSettings, MOTION_DURATION.exit);
+          }}
+        >
+          <View style={styles.menuItemInline}>
+            <AppIcon name="settings" size={18} color={theme.primary} />
+            <Text style={styles.modelManageText}>管理服务商和模型</Text>
           </View>
+        </MotionPressable>
+      </BottomSheetModal>
+
+      <BottomSheetModal
+        visible={conversationMenu}
+        onRequestClose={() => setConversationMenu(false)}
+        sheetStyle={styles.menuSheet}
+      >
+        <Text style={styles.conversationMenuTitle}>当前对话</Text>
+        <MotionPressable
+          style={[styles.menuItem, isStreaming && styles.answerActionDisabled]}
+          onPress={handleInsertTopic}
+          disabled={isStreaming}
+        >
+          <AppIcon name="add" size={21} color={theme.primary} />
+          <View style={styles.menuItemCopy}>
+            <Text style={styles.menuText}>插入新话题</Text>
+            <Text style={styles.menuHint}>留在当前对话，只从这里开始新的模型上下文</Text>
+          </View>
+        </MotionPressable>
+        <MotionPressable style={styles.menuItem} onPress={openConversationSettings}>
+          <AppIcon name="settings" size={20} color={theme.primary} />
+          <View style={styles.menuItemCopy}>
+            <Text style={styles.menuText}>对话设置</Text>
+            <Text style={styles.menuHint}>头像、参数、背景图片和系统提示词</Text>
+          </View>
+          <AppIcon name="chevronRight" size={18} color={theme.textTertiary} />
+        </MotionPressable>
+        <View style={styles.menuItem}>
+          <AppIcon name="generation" size={20} color={theme.primary} />
+          <View style={styles.menuItemCopy}>
+            <Text style={styles.menuText}>自动压缩上下文</Text>
+            <Text style={styles.menuHint}>
+              {contextInfo.compressed ? '当前已压缩，完整聊天记录不会删除' : '超过约 12k tokens 时自动压缩旧内容'}
+            </Text>
+          </View>
+          <Switch
+            value={!!currentSession?.conversationSettings?.autoCompressContext}
+            onValueChange={setAutoCompress}
+            trackColor={{ false: theme.border, true: theme.primary }}
+            disabled={isStreaming}
+          />
         </View>
-      </Modal>
+      </BottomSheetModal>
 
       <Modal
         visible={searchOpen}
@@ -1174,37 +1157,32 @@ export default function ChatScreen({
         onError={setErr}
       />
 
-      <Modal
+      <BottomSheetModal
         visible={!!actionMsg}
-        transparent
-        animationType="fade"
         onRequestClose={() => setActionMsg(null)}
+        sheetStyle={styles.menuSheet}
       >
-        <Pressable style={styles.menuBackdrop} onPress={() => setActionMsg(null)}>
-          <View style={styles.menuSheet}>
-            <MotionPressable style={styles.menuItem} onPress={() => actionMsg && copyMsg(actionMsg)}>
-              <AppIcon name="copy" size={20} color={theme.textPrimary} />
-              <Text style={styles.menuText}>复制</Text>
-            </MotionPressable>
-            {actionMsg?.role === 'user' && (
-              <MotionPressable style={styles.menuItem} onPress={() => actionMsg && startEdit(actionMsg)}>
-                <AppIcon name="edit" size={20} color={theme.textPrimary} />
-                <Text style={styles.menuText}>编辑并重发</Text>
-              </MotionPressable>
-            )}
-            {actionMsg?.role === 'assistant' && actionMsg.status !== 'streaming' && (
-              <MotionPressable style={styles.menuItem} onPress={() => actionMsg && doRegenerate(actionMsg)}>
-                <AppIcon name="retry" size={20} color={theme.textPrimary} />
-                <Text style={styles.menuText}>重新生成</Text>
-              </MotionPressable>
-            )}
-            <MotionPressable style={styles.menuItem} onPress={() => actionMsg && doDelete(actionMsg)}>
-              <AppIcon name="delete" size={20} color={theme.danger} />
-              <Text style={[styles.menuText, styles.menuDanger]}>删除</Text>
-            </MotionPressable>
-          </View>
-        </Pressable>
-      </Modal>
+        <MotionPressable style={styles.menuItem} onPress={() => actionMsg && copyMsg(actionMsg)}>
+          <AppIcon name="copy" size={20} color={theme.textPrimary} />
+          <Text style={styles.menuText}>复制</Text>
+        </MotionPressable>
+        {actionMsg?.role === 'user' && (
+          <MotionPressable style={styles.menuItem} onPress={() => actionMsg && startEdit(actionMsg)}>
+            <AppIcon name="edit" size={20} color={theme.textPrimary} />
+            <Text style={styles.menuText}>编辑并重发</Text>
+          </MotionPressable>
+        )}
+        {actionMsg?.role === 'assistant' && actionMsg.status !== 'streaming' && (
+          <MotionPressable style={styles.menuItem} onPress={() => actionMsg && doRegenerate(actionMsg)}>
+            <AppIcon name="retry" size={20} color={theme.textPrimary} />
+            <Text style={styles.menuText}>重新生成</Text>
+          </MotionPressable>
+        )}
+        <MotionPressable style={styles.menuItem} onPress={() => actionMsg && doDelete(actionMsg)}>
+          <AppIcon name="delete" size={20} color={theme.danger} />
+          <Text style={[styles.menuText, styles.menuDanger]}>删除</Text>
+        </MotionPressable>
+      </BottomSheetModal>
 
       <Modal
         visible={!!editMsg}
@@ -1343,12 +1321,13 @@ function MessageBubble({
   const appear = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    Animated.spring(appear, {
+    Animated.timing(appear, {
       toValue: 1,
+      duration: MOTION_DURATION.enter,
+      easing: MOTION_EASING.enter,
       useNativeDriver: true,
-      speed: 34,
-      bounciness: 2,
     }).start();
+    return () => appear.stopAnimation();
   }, [appear]);
 
   const isUser = msg.role === 'user';
@@ -1360,21 +1339,10 @@ function MessageBubble({
     return <TopicBoundary createdAt={msg.createdAt} />;
   }
   return (
-    <Animated.View
+    <View
       style={[
         styles.bubbleRow,
         isUser ? styles.rowRight : styles.rowLeft,
-        {
-          opacity: appear,
-          transform: [
-            {
-              translateY: appear.interpolate({
-                inputRange: [0, 1],
-                outputRange: [8, 0],
-              }),
-            },
-          ],
-        },
       ]}
     >
       {!isUser && (
@@ -1382,7 +1350,23 @@ function MessageBubble({
           <MessageAvatar uri={assistantAvatarUri} fallback="AI" />
         </View>
       )}
-      <View style={[styles.messageColumn, isUser ? styles.messageColumnRight : styles.messageColumnLeft]}>
+      <Animated.View
+        style={[
+          styles.messageColumn,
+          isUser ? styles.messageColumnRight : styles.messageColumnLeft,
+          {
+            opacity: appear,
+            transform: [
+              {
+                translateY: appear.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [6, 0],
+                }),
+              },
+            ],
+          },
+        ]}
+      >
         <Pressable
           style={[
             styles.bubble,
@@ -1467,9 +1451,9 @@ function MessageBubble({
             </MotionPressable>
           </View>
         )}
-      </View>
+      </Animated.View>
       {isUser && <MessageAvatar uri={userAvatarUri} fallback="我" />}
-    </Animated.View>
+    </View>
   );
 }
 

@@ -23,12 +23,18 @@ export default function App() {
 
   useEffect(() => {
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (!drawerOpen) return false;
-      setDrawerOpen(false);
-      return true;
+      if (drawerOpen) {
+        setDrawerOpen(false);
+        return true;
+      }
+      if (showSettings) {
+        setShowSettings(false);
+        return true;
+      }
+      return false;
     });
     return () => subscription.remove();
-  }, [drawerOpen]);
+  }, [drawerOpen, showSettings]);
 
   return (
     <SafeAreaProvider>

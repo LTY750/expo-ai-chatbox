@@ -20,6 +20,7 @@ import { useTheme, type ThemeColors } from '../theme';
 import type { Session } from '../types';
 import { AppIcon } from './AppIcon';
 import { MotionPressable } from './MotionPressable';
+import { MOTION_DURATION } from './motion';
 
 const SCREEN_W = Dimensions.get('window').width;
 const DRAWER_W = Math.min(300, SCREEN_W * 0.82);
@@ -71,8 +72,11 @@ export default function Drawer({
   // 滑动 + 遮罩淡入；用 ref 持有 Animated.Value
   const tx = useRef(new Animated.Value(-DRAWER_W)).current;
   const fade = useRef(new Animated.Value(0)).current;
+  const openSettingsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    tx.stopAnimation();
+    fade.stopAnimation();
     Animated.parallel([
       Animated.spring(tx, {
         toValue: open ? 0 : -DRAWER_W,
@@ -88,6 +92,12 @@ export default function Drawer({
       }),
     ]).start();
   }, [open, tx, fade]);
+
+  useEffect(() => () => {
+    tx.stopAnimation();
+    fade.stopAnimation();
+    if (openSettingsTimerRef.current) clearTimeout(openSettingsTimerRef.current);
+  }, [fade, tx]);
 
   useEffect(() => {
     if (!open) {
@@ -106,6 +116,13 @@ export default function Drawer({
     Keyboard.dismiss();
     await selectSession(id);
     onClose();
+  }
+
+  function handleOpenSettings() {
+    Keyboard.dismiss();
+    onClose();
+    if (openSettingsTimerRef.current) clearTimeout(openSettingsTimerRef.current);
+    openSettingsTimerRef.current = setTimeout(onOpenSettings, MOTION_DURATION.exit);
   }
 
   return (
@@ -183,10 +200,7 @@ export default function Drawer({
 
         <MotionPressable
           style={[styles.footer, { paddingBottom: insets.bottom + 14 }]}
-          onPress={() => {
-            onClose();
-            onOpenSettings();
-          }}
+          onPress={handleOpenSettings}
         >
           <AppIcon name="settings" size={21} color={theme.textPrimary} />
           <Text style={styles.footerText}>设置</Text>

@@ -1,15 +1,17 @@
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import {
   Animated,
+  Easing,
   Pressable,
   type GestureResponderEvent,
   type PressableProps,
 } from 'react-native';
+import { MOTION_DURATION } from './motion';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 export function MotionPressable({
-  pressScale = 0.94,
+  pressScale = 0.97,
   disabled,
   onPressIn,
   onPressOut,
@@ -18,23 +20,25 @@ export function MotionPressable({
 }: PressableProps & { pressScale?: number }) {
   const scale = useRef(new Animated.Value(1)).current;
 
-  const animate = (toValue: number) => {
+  useEffect(() => () => scale.stopAnimation(), [scale]);
+
+  const animate = (toValue: number, duration: number) => {
     scale.stopAnimation();
-    Animated.spring(scale, {
+    Animated.timing(scale, {
       toValue,
+      duration,
+      easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
-      speed: 42,
-      bounciness: 1,
     }).start();
   };
 
   const handlePressIn = (event: GestureResponderEvent) => {
-    if (!disabled) animate(pressScale);
+    if (!disabled) animate(pressScale, MOTION_DURATION.pressIn);
     onPressIn?.(event);
   };
 
   const handlePressOut = (event: GestureResponderEvent) => {
-    animate(1);
+    animate(1, MOTION_DURATION.pressOut);
     onPressOut?.(event);
   };
 

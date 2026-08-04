@@ -22,6 +22,7 @@ import type { AutoTitleMode, DocumentParserProvider, TavilySearchDepth } from '.
 import ProviderDetailScreen from './ProviderDetailScreen';
 import { AppIcon, type AppIconName } from './AppIcon';
 import { MotionPressable } from './MotionPressable';
+import { MOTION_DURATION, MOTION_EASING } from './motion';
 import {
   DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS,
   modelContextKey,
@@ -48,27 +49,43 @@ type Page =
   | 'provider-new'
   | `provider:${string}`;
 
+function pageDepth(page: Page): number {
+  if (page === 'home') return 0;
+  if (page === 'provider-new' || page.startsWith('provider:')) return 2;
+  return 1;
+}
+
 export default function SettingsScreen({ onClose }: { onClose: () => void }) {
   const theme = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
   const [page, setPage] = useState<Page>('home');
-  const pageAnim = useRef(new Animated.Value(1)).current;
+  const [pageDirection, setPageDirection] = useState(1);
+  const pageAnim = useRef(new Animated.Value(0)).current;
+
+  function navigateTo(next: Page) {
+    if (next === page) return;
+    setPageDirection(pageDepth(next) >= pageDepth(page) ? 1 : -1);
+    setPage(next);
+  }
 
   useEffect(() => {
     pageAnim.setValue(0);
     Animated.timing(pageAnim, {
       toValue: 1,
-      duration: 190,
+      duration: MOTION_DURATION.enter,
+      easing: MOTION_EASING.enter,
       useNativeDriver: true,
     }).start();
   }, [page, pageAnim]);
 
+  useEffect(() => () => pageAnim.stopAnimation(), [pageAnim]);
+
   useEffect(() => {
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
       if (page === 'provider-new' || page.startsWith('provider:')) {
-        setPage('models');
+        navigateTo('models');
       } else if (page !== 'home') {
-        setPage('home');
+        navigateTo('home');
       } else {
         onClose();
       }
@@ -77,12 +94,26 @@ export default function SettingsScreen({ onClose }: { onClose: () => void }) {
     return () => subscription.remove();
   }, [page, onClose]);
 
+  const pageAnimatedStyle = {
+    opacity: pageAnim,
+    transform: [
+      {
+        translateX: pageAnim.interpolate({
+          inputRange: [0, 1],
+          outputRange: [pageDirection * 18, 0],
+        }),
+      },
+    ],
+  };
+
   if (page === 'provider-new' || page.startsWith('provider:')) {
     return (
-      <ProviderDetailScreen
-        providerId={page === 'provider-new' ? null : page.slice('provider:'.length)}
-        onBack={() => setPage('models')}
-      />
+      <Animated.View style={[styles.flex, pageAnimatedStyle]}>
+        <ProviderDetailScreen
+          providerId={page === 'provider-new' ? null : page.slice('provider:'.length)}
+          onBack={() => navigateTo('models')}
+        />
+      </Animated.View>
     );
   }
 
@@ -101,30 +132,15 @@ export default function SettingsScreen({ onClose }: { onClose: () => void }) {
     <View style={styles.flex}>
       <Header
         title={title}
-        onBack={page === 'home' ? onClose : () => setPage('home')}
+        onBack={page === 'home' ? onClose : () => navigateTo('home')}
         backText={page === 'home' ? '返回' : '设置'}
       />
-      <Animated.View
-        style={[
-          styles.flex,
-          {
-            opacity: pageAnim,
-            transform: [
-              {
-                translateY: pageAnim.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [10, 0],
-                }),
-              },
-            ],
-          },
-        ]}
-      >
-        {page === 'home' && <SettingsHome onOpen={setPage} />}
+      <Animated.View style={[styles.flex, pageAnimatedStyle]}>
+        {page === 'home' && <SettingsHome onOpen={navigateTo} />}
         {page === 'models' && (
           <ModelProvidersScreen
-            onEdit={(id) => setPage(`provider:${id}`)}
-            onAdd={() => setPage('provider-new')}
+            onEdit={(id) => navigateTo(`provider:${id}`)}
+            onAdd={() => navigateTo('provider-new')}
           />
         )}
         {page === 'documents' && <DocumentParsingScreen />}
