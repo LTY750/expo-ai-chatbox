@@ -18,10 +18,14 @@ import {
   getTavilyKey,
 } from '../settings';
 import { useTheme, type ThemeColors, type ThemeMode } from '../theme';
-import type { DocumentParserProvider } from '../types';
+import type { AutoTitleMode, DocumentParserProvider, TavilySearchDepth } from '../types';
 import ProviderDetailScreen from './ProviderDetailScreen';
 import { AppIcon, type AppIconName } from './AppIcon';
 import { MotionPressable } from './MotionPressable';
+import {
+  DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS,
+  modelContextKey,
+} from '../context';
 
 function errorMessage(error: unknown): string {
   return error instanceof Error && error.message ? error.message : String(error);
@@ -164,6 +168,8 @@ function SettingsHome({ onOpen }: { onOpen: (p: Page) => void }) {
   const docParser = useChatStore((s) => s.settings.documentParser.provider);
   const temperature = useChatStore((s) => s.settings.temperature);
   const topP = useChatStore((s) => s.settings.topP);
+  const autoTitleMode = useChatStore((s) => s.settings.autoTitleMode);
+  const tavilySearchDepth = useChatStore((s) => s.settings.tavilySearchDepth);
   const tavilyReady = useChatStore((s) => s.tavilyReady);
   const current = providers.find((p) => p.id === currentProviderId);
 
@@ -184,13 +190,17 @@ function SettingsHome({ onOpen }: { onOpen: (p: Page) => void }) {
       <NavRow
         icon="search"
         title="联网搜索"
-        subtitle={tavilyReady ? 'Tavily 已配置' : 'Tavily 未配置'}
+        subtitle={
+          tavilyReady
+            ? `Tavily 已配置 · ${tavilySearchDepth === 'advanced' ? '高级搜索' : '基础搜索'}`
+            : 'Tavily 未配置'
+        }
         onPress={() => onOpen('search')}
       />
       <NavRow
         icon="generation"
         title="生成参数"
-        subtitle={`温度 ${temperature} · Top P ${topP}`}
+        subtitle={`温度 ${temperature} · Top P ${topP} · ${autoTitleMode === 'ai' ? 'AI 标题' : '本地标题'}`}
         onPress={() => onOpen('generation')}
       />
       <NavRow icon="appearance" title="外观" subtitle="主题模式" onPress={() => onOpen('appearance')} />
@@ -718,6 +728,8 @@ function DocumentParsingScreen() {
 function SearchSettingsScreen() {
   const theme = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
+  const settings = useChatStore((s) => s.settings);
+  const updateSettings = useChatStore((s) => s.updateSettings);
   const saveTavilyKey = useChatStore((s) => s.saveTavilyKey);
   const [tavilyKey, setTavilyKey] = useState('');
   const [keyLoaded, setKeyLoaded] = useState(false);
@@ -727,6 +739,9 @@ function SearchSettingsScreen() {
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [searchDepth, setSearchDepth] = useState<TavilySearchDepth>(
+    settings.tavilySearchDepth
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -754,6 +769,7 @@ function SearchSettingsScreen() {
     setSaveError(null);
     try {
       if (keyDirtyRef.current) await saveTavilyKey(tavilyKey);
+      await updateSettings({ tavilySearchDepth: searchDepth });
       setSaved(true);
       setTimeout(() => setSaved(false), 1500);
     } catch (error: unknown) {
@@ -780,6 +796,25 @@ function SearchSettingsScreen() {
       )}
       <Text style={styles.section}>Tavily</Text>
       <Text style={styles.hint}>开启聊天页联网搜索后，模型会在需要最新信息时调用 Tavily。</Text>
+      <Text style={styles.fieldLabel}>搜索深度</Text>
+      <View style={styles.segment}>
+        {([
+          { value: 'basic', label: '基础 · 1 credit' },
+          { value: 'advanced', label: '高级 · 2 credits' },
+        ] as const).map((option) => (
+          <MotionPressable
+            key={option.value}
+            style={[styles.segBtn, searchDepth === option.value && styles.segBtnActive]}
+            onPress={() => setSearchDepth(option.value)}
+            disabled={saving}
+          >
+            <Text style={[styles.segText, searchDepth === option.value && styles.segTextActive]}>
+              {option.label}
+            </Text>
+          </MotionPressable>
+        ))}
+      </View>
+      <Text style={styles.hint}>基础搜索更省额度；高级搜索适合需要更高相关性的复杂问题。</Text>
       <Text style={styles.fieldLabel}>API Key</Text>
       <TextInput
         style={[styles.input, (!keyLoaded || saving) && styles.disabled]}
@@ -820,6 +855,11 @@ function GenerationSettingsScreen() {
   const [temperature, setTemperature] = useState(String(settings.temperature));
   const [topP, setTopP] = useState(String(settings.topP));
   const [maxTokens, setMaxTokens] = useState(String(settings.maxTokens));
+  const [autoTitleMode, setAutoTitleMode] = useState<AutoTitleMode>(settings.autoTitleMode);
+  const contextKey = modelContextKey(settings.currentProviderId, settings.currentModel);
+  const [contextWindowTokens, setContextWindowTokens] = useState(
+    String(settings.modelContextWindows[contextKey] ?? DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS)
+  );
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -835,6 +875,7 @@ function GenerationSettingsScreen() {
     const temperatureValue = Number(temperature.trim());
     const topPValue = Number(topP.trim());
     const maxTokensValue = Number(maxTokens.trim());
+    const contextWindowValue = Number(contextWindowTokens.trim());
     if (!temperature.trim() || !Number.isFinite(temperatureValue) || temperatureValue < 0 || temperatureValue > 2) {
       setSaveError('Temperature 必须是 0 到 2 之间的数字');
       return;
@@ -847,6 +888,19 @@ function GenerationSettingsScreen() {
       setSaveError('最大输出 Token 必须是 1 到 200000 之间的整数');
       return;
     }
+    if (
+      !contextWindowTokens.trim()
+      || !Number.isInteger(contextWindowValue)
+      || contextWindowValue < 2_048
+      || contextWindowValue > 2_000_000
+    ) {
+      setSaveError('上下文窗口必须是 2048 到 2000000 之间的整数');
+      return;
+    }
+    if (contextWindowValue <= maxTokensValue + 1_024) {
+      setSaveError('上下文窗口需要比最大输出 Token 至少多 1024');
+      return;
+    }
 
     setSaving(true);
     setSaveError(null);
@@ -855,6 +909,11 @@ function GenerationSettingsScreen() {
         temperature: temperatureValue,
         topP: topPValue,
         maxTokens: maxTokensValue,
+        autoTitleMode,
+        modelContextWindows: {
+          ...settings.modelContextWindows,
+          [contextKey]: contextWindowValue,
+        },
       });
       setSaved(true);
     } catch (error: unknown) {
@@ -916,6 +975,50 @@ function GenerationSettingsScreen() {
           editable={!saving}
         />
       </View>
+
+      <View style={styles.parameterCard}>
+        <View style={styles.parameterHeader}>
+          <Text style={styles.parameterName}>模型上下文窗口</Text>
+          <Text style={styles.parameterRange}>当前模型</Text>
+        </View>
+        <Text style={styles.hint} numberOfLines={2}>
+          {settings.currentModel || '未选择模型'} · 用于估算占用量和自动压缩，不会改变服务商的真实限制。
+        </Text>
+        <TextInput
+          style={styles.input}
+          value={contextWindowTokens}
+          onChangeText={(value) => updateField(setContextWindowTokens, value.replace(/\D/g, ''))}
+          placeholder={String(DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS)}
+          placeholderTextColor={theme.placeholder}
+          keyboardType="number-pad"
+          editable={!saving}
+        />
+      </View>
+
+      <Text style={styles.section}>对话标题</Text>
+      <View style={styles.segment}>
+        {([
+          { value: 'local', label: '本地生成' },
+          { value: 'ai', label: 'AI 生成' },
+        ] as const).map((option) => (
+          <MotionPressable
+            key={option.value}
+            style={[styles.segBtn, autoTitleMode === option.value && styles.segBtnActive]}
+            onPress={() => {
+              setAutoTitleMode(option.value);
+              setSaved(false);
+            }}
+            disabled={saving}
+          >
+            <Text style={[styles.segText, autoTitleMode === option.value && styles.segTextActive]}>
+              {option.label}
+            </Text>
+          </MotionPressable>
+        ))}
+      </View>
+      <Text style={styles.hint}>
+        本地生成不会调用模型；AI 生成会在每个新对话首次回复后额外请求一次当前模型。
+      </Text>
 
       <MotionPressable
         style={[styles.saveBtn, saving && styles.disabled]}

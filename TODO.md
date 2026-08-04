@@ -8,7 +8,7 @@
 - [x] 配置 API Key / Base URL / Model（多服务商，Key 存 SecureStore）
 - [x] 聊天页面（流式输出 + 停止生成）
 - [x] OpenAI-compatible 流式接口 + Anthropic 协议
-- [x] 会话列表（侧边栏）+ 删除 / 重命名 / 标题自动总结
+- [x] 会话列表（侧边栏）+ 删除 / 重命名 / 本地标题（可选 AI 总结）
 - [x] 本地保存聊天记录（expo-sqlite）
 - [x] Markdown 渲染（代码块折叠 + 一键复制）
 - [x] 设置页分栏（模型提供商 / 文档解析 / 联网搜索 / 外观 / 全局提示词）
@@ -21,22 +21,23 @@
 - [x] **深色模式（跟随系统 / 浅 / 深）**
 - [x] **LaTeX 数学公式渲染（MathView，webview）**
 - [x] **Mermaid 图表渲染（MermaidView，webview）**
+- [x] Tavily basic / advanced 搜索深度与额度提示（默认 basic）
+- [x] 每个服务商/模型独立上下文窗口 + 估算占用量 + 动态压缩预算
+- [x] Key 为空的中文前置提示（聊天、解析、获取模型、单模型测试）
 
 ## 当前正在做
 - 暂无进行中任务
 
 ## 已知问题
-- key 为空时直接显示服务器返回的英文 401 原文，缺友好提示
 - 模型会自称 Claude（LLM 自我认知不可靠的通病，非 bug）
 - 改原生模块后 Fast Refresh 不够，需重启 Expo Go 才生效
-- Tavily / LlamaParse / 阿里云文档解析（大模型版）/ 数学公式 / Mermaid 已通过编译与运行，但**功能正确性待配 key 实测**
+- Tavily / LlamaParse / 阿里云文档解析（大模型版）已通过编译与运行，但**功能正确性待配 key 实测**
 - 阿里云文档解析（大模型版）踩坑记录：`SubmitDocParserJob` 要求 `FileUrl`；官方 SDK 的 `SubmitDocParserJobAdvance + fileUrlObject` 是 SDK 封装的本地文件流上传能力，Expo 客户端手写 multipart 会被服务端当成 URL 模式并报 `FileUrl is mandatory`。当前改为 OSS 临时上传 + 签名 URL + `FileUrl`。
 
 ## 下一步
-- [ ] 实测联网搜索（配 Tavily key）、LlamaParse、阿里云文档解析（大模型版，需 RAM + OSS 配置）、数学公式 / Mermaid 渲染
+- [ ] 实测联网搜索（配 Tavily key）、LlamaParse、阿里云文档解析（大模型版，需 RAM + OSS 配置）
 - [ ] 给 OSS Bucket 配生命周期规则：自动删除 `chatbox-docs/` 下超过 1 天的临时文件
-- [ ] key 为空的友好提示
-- [ ] 会话搜索 / 字体设置
+- [ ] 字体设置
 - [ ] 助手角色 / Prompt 模板
 - [ ] 数据导入导出
 - [ ] RAG 本地知识库（远期）

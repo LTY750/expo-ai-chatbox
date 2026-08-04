@@ -32,7 +32,12 @@ import * as Clipboard from 'expo-clipboard';
 import { AppIcon } from './AppIcon';
 import { MotionPressable } from './MotionPressable';
 import ConversationSettingsModal from './ConversationSettingsModal';
-import { estimateTokenCount, prepareContext } from '../context';
+import {
+  DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS,
+  estimateTokenCount,
+  modelContextKey,
+  prepareContext,
+} from '../context';
 
 export default function ChatScreen({
   onOpenDrawer,
@@ -53,6 +58,8 @@ export default function ChatScreen({
   const currentModel = useChatStore((s) => s.settings.currentModel);
   const currentProviderId = useChatStore((s) => s.settings.currentProviderId);
   const globalSystemPrompt = useChatStore((s) => s.settings.systemPrompt);
+  const maxOutputTokens = useChatStore((s) => s.settings.maxTokens);
+  const modelContextWindows = useChatStore((s) => s.settings.modelContextWindows);
   const selectModel = useChatStore((s) => s.selectModel);
   const sessions = useChatStore((s) => s.sessions);
   const currentSessionId = useChatStore((s) => s.currentSessionId);
@@ -174,13 +181,26 @@ export default function ChatScreen({
 
   const effectiveSystemPrompt = currentSession?.settingsOverride?.systemPrompt
     ?? globalSystemPrompt;
+  const contextWindowTokens = modelContextWindows[
+    modelContextKey(currentProviderId, currentModel)
+  ] ?? DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS;
   const contextInfo = useMemo(
     () => prepareContext(
       messages,
       effectiveSystemPrompt,
-      !!currentSession?.conversationSettings?.autoCompressContext
+      {
+        autoCompress: !!currentSession?.conversationSettings?.autoCompressContext,
+        contextWindowTokens,
+        reservedOutputTokens: maxOutputTokens,
+      }
     ),
-    [messages, effectiveSystemPrompt, currentSession?.conversationSettings?.autoCompressContext]
+    [
+      messages,
+      effectiveSystemPrompt,
+      currentSession?.conversationSettings?.autoCompressContext,
+      contextWindowTokens,
+      maxOutputTokens,
+    ]
   );
   const searchResults = useMemo(() => {
     const query = searchQuery.trim().toLocaleLowerCase();
@@ -811,11 +831,11 @@ export default function ChatScreen({
         <Text
           style={[styles.contextUsage, contextInfo.compressed && styles.contextUsageCompressed]}
           numberOfLines={1}
-          accessibilityLabel={`当前上下文约 ${contextInfo.effectiveTokens} tokens`}
+          accessibilityLabel={
+            `当前上下文估算 ${contextInfo.effectiveTokens} tokens，模型窗口 ${contextWindowTokens} tokens`
+          }
         >
-          {contextInfo.compressed
-            ? `上下文 ${formatTokenAmount(contextInfo.effectiveTokens)} / ${formatTokenAmount(contextInfo.originalTokens)}`
-            : `上下文 ${formatTokenAmount(contextInfo.effectiveTokens)}`}
+          {`上下文 ≈${formatTokenAmount(contextInfo.effectiveTokens)}/${formatTokenAmount(contextWindowTokens)}`}
         </Text>
         <MotionPressable style={styles.modelBtn} onPress={() => setPickerOpen(true)}>
           <Text style={styles.modelBtnText} numberOfLines={1}>
@@ -1844,7 +1864,7 @@ function createStyles(theme: ThemeColors) {
     rowLeft: { justifyContent: 'flex-start' },
     rowRight: { justifyContent: 'flex-end' },
     messageColumn: { maxWidth: '84%', flexShrink: 1 },
-    messageColumnLeft: { alignItems: 'flex-start' },
+    messageColumnLeft: { alignItems: 'stretch', width: '84%' },
     messageColumnRight: { alignItems: 'flex-end' },
     assistantAvatarSlot: { alignSelf: 'flex-start', marginTop: 3 },
     messageAvatar: { width: 30, height: 30, borderRadius: 15, backgroundColor: theme.surfaceVariant },

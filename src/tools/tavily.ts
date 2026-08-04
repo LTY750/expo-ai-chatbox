@@ -1,6 +1,7 @@
 // Tavily 联网搜索 —— https://api.tavily.com/search
 // 返回结果格式化成模型易读的文本块
 import { fetch as expoFetch } from 'expo/fetch';
+import type { TavilySearchDepth } from '../types';
 
 const TAVILY_ENDPOINT = 'https://api.tavily.com/search';
 const RESULT_CONTENT_MAX = 500; // 每条结果正文截断字数，防撑爆上下文
@@ -17,9 +18,10 @@ export interface TavilyResult {
 export async function tavilySearch(
   apiKey: string,
   query: string,
-  opts?: { maxResults?: number; signal?: AbortSignal }
+  opts?: { maxResults?: number; searchDepth?: TavilySearchDepth; signal?: AbortSignal }
 ): Promise<TavilyResult> {
   const maxResults = opts?.maxResults ?? 5;
+  const searchDepth = opts?.searchDepth ?? 'basic';
   // 用外部 signal 与 15s 超时 signal 合并：任一触发即中止
   const timeoutSignal = AbortSignal.timeout(15000);
   const signal = opts?.signal
@@ -34,7 +36,7 @@ export async function tavilySearch(
     },
     body: JSON.stringify({
       query,
-      search_depth: 'advanced',
+      search_depth: searchDepth,
       include_answer: true,
       max_results: maxResults,
     }),

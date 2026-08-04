@@ -43,7 +43,11 @@ import { makeProvider } from './providers/factory';
 import { buildChatMessages, type ToolDef, type ToolExecutor } from './providers/base';
 import { getEnabledTools, makeToolExecutor } from './tools';
 import { parseFile, type PickedFile } from './parse';
-import { prepareContext } from './context';
+import {
+  DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS,
+  modelContextKey,
+  prepareContext,
+} from './context';
 
 // 待发送的附件（含解析出的文本，发送时拼进 content）
 export interface PendingAttachment extends Attachment {
@@ -131,7 +135,10 @@ async function buildTools(
   if (!get().webSearchEnabled) return {};
   const tavilyKey = await getTavilyKey();
   if (!tavilyKey) return {};
-  return { tools: getEnabledTools(), executeTool: makeToolExecutor(tavilyKey) };
+  return {
+    tools: getEnabledTools(),
+    executeTool: makeToolExecutor(tavilyKey, get().settings.tavilySearchDepth),
+  };
 }
 
 interface ChatPreflight {
@@ -209,10 +216,17 @@ async function streamReply(
   // 请求历史始终取指定会话的数据库快照，不依赖当前 UI 正在显示哪个会话。
   const history = await db.listMessages(sessionId);
   const session = get().sessions.find((item) => item.id === sessionId);
+  const contextWindowTokens = get().settings.modelContextWindows[
+    modelContextKey(provider.id, effective.model)
+  ] ?? DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS;
   const context = prepareContext(
     history,
     effective.systemPrompt,
-    !!session?.conversationSettings?.autoCompressContext
+    {
+      autoCompress: !!session?.conversationSettings?.autoCompressContext,
+      contextWindowTokens,
+      reservedOutputTokens: effective.maxTokens,
+    }
   );
   const chatMessages = buildChatMessages(context.history, effective, context.summary);
   const inst = makeProvider(provider);
@@ -697,10 +711,31 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const session = get().sessions.find((x) => x.id === sessionId);
     if (!session || session.title !== '新对话') return;
     const { settings } = get();
+    const localTitle = userText.replace(/\s+/g, ' ').trim().slice(0, 20) || '文档对话';
+    const applyTitle = async (title: string) => {
+      await db.updateSession(sessionId, { title });
+      set((s) => ({
+        sessions: s.sessions.map((x) =>
+          x.id === sessionId ? { ...x, title } : x
+        ),
+      }));
+    };
+
+    if (settings.autoTitleMode !== 'ai') {
+      await applyTitle(localTitle);
+      return;
+    }
+
     const provider = curProvider(settings);
-    if (!provider) return;
+    if (!provider) {
+      await applyTitle(localTitle);
+      return;
+    }
     const apiKey = await getProviderKey(provider.id);
-    if (!apiKey) return;
+    if (!apiKey) {
+      await applyTitle(localTitle);
+      return;
+    }
 
     try {
       const inst = makeProvider(provider);
@@ -713,22 +748,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
         apiKey,
       });
       const title = raw.trim().replace(/^["'「」]+|["'「」]+$/g, '').slice(0, 20);
-      if (!title) return;
-      await db.updateSession(sessionId, { title });
-      set((s) => ({
-        sessions: s.sessions.map((x) =>
-          x.id === sessionId ? { ...x, title } : x
-        ),
-      }));
+      await applyTitle(title || localTitle);
     } catch {
       // 总结失败不影响对话，回退用首句
-      const fallback = userText.slice(0, 20) || '文档对话';
-      await db.updateSession(sessionId, { title: fallback });
-      set((s) => ({
-        sessions: s.sessions.map((x) =>
-          x.id === sessionId ? { ...x, title: fallback } : x
-        ),
-      }));
+      await applyTitle(localTitle);
     }
   },
 

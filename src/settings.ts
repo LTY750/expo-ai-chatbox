@@ -50,6 +50,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   topP: 1,
   maxTokens: 4096,
   systemPrompt: '',
+  autoTitleMode: 'local',
+  modelContextWindows: {},
   ocr: { baseURL: SILICONFLOW_BASE_URL, model: 'deepseek-ai/DeepSeek-OCR' },
   documentParser: {
     provider: 'llamaparse',
@@ -66,6 +68,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
       },
     },
   },
+  tavilySearchDepth: 'basic',
   theme: 'system',
 };
 
@@ -117,10 +120,22 @@ function normalizeSettings(s: any): AppSettings {
     topP: normalizeNumber(s.topP ?? s.top_p, 1, 0, 1),
     maxTokens: s.maxTokens ?? 4096,
     systemPrompt: s.systemPrompt ?? '',
+    autoTitleMode: s.autoTitleMode === 'ai' ? 'ai' : 'local',
+    modelContextWindows: normalizeModelContextWindows(s.modelContextWindows),
     ocr: s.ocr?.baseURL ? s.ocr : DEFAULT_OCR,
     documentParser: normalizeDocumentParser(s.documentParser),
+    tavilySearchDepth: s.tavilySearchDepth === 'advanced' ? 'advanced' : 'basic',
     theme: s.theme ?? 'system',
   };
+}
+
+function normalizeModelContextWindows(value: unknown): Record<string, number> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .map(([key, raw]) => [key, Number(raw)] as const)
+      .filter(([, parsed]) => Number.isInteger(parsed) && parsed >= 2_048 && parsed <= 2_000_000)
+  );
 }
 
 function normalizeNumber(value: unknown, fallback: number, min: number, max: number): number {

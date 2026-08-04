@@ -1,9 +1,14 @@
 import type { Message } from './types';
 
-export const CONTEXT_COMPRESSION_THRESHOLD = 12_000;
-export const RECENT_CONTEXT_TARGET = 8_000;
+export const DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS = 16_384;
+const CONTEXT_SAFETY_MARGIN_TOKENS = 1_024;
+const MIN_CONTEXT_BUDGET_TOKENS = 2_048;
 const SUMMARY_CHAR_LIMIT = 10_000;
 const SUMMARY_ITEM_CHAR_LIMIT = 700;
+
+export function modelContextKey(providerId: string, model: string): string {
+  return `${providerId}::${model}`;
+}
 
 export function estimateTokenCount(text: string): number {
   const trimmed = text.trim();
@@ -70,13 +75,37 @@ export interface PreparedContext {
   originalTokens: number;
   effectiveTokens: number;
   compressed: boolean;
+  contextWindowTokens: number;
+  compressionThreshold: number;
+}
+
+export interface PrepareContextOptions {
+  autoCompress?: boolean;
+  contextWindowTokens?: number;
+  reservedOutputTokens?: number;
 }
 
 export function prepareContext(
   messages: Message[],
   systemPrompt?: string,
-  autoCompress = false
+  options: PrepareContextOptions = {}
 ): PreparedContext {
+  const contextWindowTokens = Number.isFinite(options.contextWindowTokens)
+    ? Math.max(MIN_CONTEXT_BUDGET_TOKENS, Math.floor(options.contextWindowTokens!))
+    : DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS;
+  const requestedOutputTokens = Number.isFinite(options.reservedOutputTokens)
+    ? Math.max(0, Math.floor(options.reservedOutputTokens!))
+    : 0;
+  const maxOutputReservation = Math.max(
+    0,
+    contextWindowTokens - CONTEXT_SAFETY_MARGIN_TOKENS - MIN_CONTEXT_BUDGET_TOKENS
+  );
+  const reservedOutputTokens = Math.min(requestedOutputTokens, maxOutputReservation);
+  const compressionThreshold = Math.max(
+    MIN_CONTEXT_BUDGET_TOKENS,
+    contextWindowTokens - CONTEXT_SAFETY_MARGIN_TOKENS - reservedOutputTokens
+  );
+  const recentContextTarget = Math.max(1_024, Math.floor(compressionThreshold * 2 / 3));
   const active = messagesAfterLatestTopic(messages);
   const systemTokens = estimateTokenCount(systemPrompt ?? '');
   const originalTokens = systemTokens + active.reduce(
@@ -84,12 +113,14 @@ export function prepareContext(
     0
   );
 
-  if (!autoCompress || originalTokens <= CONTEXT_COMPRESSION_THRESHOLD) {
+  if (!options.autoCompress || originalTokens <= compressionThreshold) {
     return {
       history: active,
       originalTokens,
       effectiveTokens: originalTokens,
       compressed: false,
+      contextWindowTokens,
+      compressionThreshold,
     };
   }
 
@@ -97,7 +128,7 @@ export function prepareContext(
   let firstRecent = active.length;
   for (let index = active.length - 1; index >= 0; index--) {
     const tokens = messageTokenCount(active[index]);
-    if (firstRecent < active.length && recentTokens + tokens > RECENT_CONTEXT_TARGET) break;
+    if (firstRecent < active.length && recentTokens + tokens > recentContextTarget) break;
     firstRecent = index;
     recentTokens += tokens;
   }
@@ -109,6 +140,8 @@ export function prepareContext(
       originalTokens,
       effectiveTokens: originalTokens,
       compressed: false,
+      contextWindowTokens,
+      compressionThreshold,
     };
   }
   const summary = buildExtractiveSummary(older);
@@ -118,5 +151,7 @@ export function prepareContext(
     originalTokens,
     effectiveTokens: recentTokens + estimateTokenCount(summary),
     compressed: true,
+    contextWindowTokens,
+    compressionThreshold,
   };
 }

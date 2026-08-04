@@ -123,6 +123,12 @@ export default function ProviderDetailScreen({
       setPickerOpen(true);
       return;
     }
+    if (!apiKey.trim()) {
+      setFetchErr('请先填写 API Key');
+      setFetched([]);
+      setPickerOpen(true);
+      return;
+    }
     setPickerOpen(true);
     setFetching(true);
     setFetchErr(null);

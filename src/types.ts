@@ -91,6 +91,8 @@ export interface Session {
 // API 协议类型 —— 决定用哪套请求/解析逻辑
 export type ProviderType = 'openai' | 'anthropic';
 export type DocumentParserProvider = 'llamaparse' | 'aliyun';
+export type TavilySearchDepth = 'basic' | 'advanced';
+export type AutoTitleMode = 'local' | 'ai';
 
 // 一个 API 服务商：下挂多个模型；key 不在这里，存 SecureStore
 export interface Provider {
@@ -112,6 +114,10 @@ export interface AppSettings {
   topP: number;
   maxTokens: number;
   systemPrompt: string;
+  // 默认本地截取首条消息命名；可选 AI 模式会额外发送一次 completion 请求
+  autoTitleMode: AutoTitleMode;
+  // 每个“服务商 + 模型”的上下文窗口；未知模型使用本地安全默认值
+  modelContextWindows: Record<string, number>;
   // 文档解析 OCR（独立配置；key 存 SecureStore，id 固定 'ocr'）
   ocr: { baseURL: string; model: string };
   // PDF / Word / PPT / Excel 等文档解析服务
@@ -130,6 +136,8 @@ export interface AppSettings {
       };
     };
   };
+  // Tavily 搜索深度：basic 每次 1 credit，advanced 每次 2 credits
+  tavilySearchDepth: TavilySearchDepth;
   // 主题模式
   theme: ThemeMode;
 }
