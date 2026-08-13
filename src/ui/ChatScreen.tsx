@@ -119,6 +119,7 @@ export default function ChatScreen({
   const [pendingQuote, setPendingQuote] = useState<MessageQuote | null>(null);
   // 消息长按操作菜单 + 编辑弹窗
   const [actionMsg, setActionMsg] = useState<Message | null>(null);
+  const [inlineActionMessageId, setInlineActionMessageId] = useState<string | null>(null);
   const [editMsg, setEditMsg] = useState<Message | null>(null);
   const [editText, setEditText] = useState('');
   const [previewImage, setPreviewImage] = useState<string | null>(null);
@@ -677,10 +678,14 @@ export default function ChatScreen({
                 msg={item}
                 copied={copiedMessageId === item.id}
                 highlighted={highlightedMessageId === item.id}
+                actionsVisible={inlineActionMessageId === item.id}
                 userAvatarUri={currentSession?.conversationSettings?.userAvatarUri}
                 assistantAvatarUri={currentSession?.conversationSettings?.assistantAvatarUri}
                 actionsDisabled={isStreaming}
-                onLongPress={() => setActionMsg(item)}
+                onToggleActions={() => setInlineActionMessageId((current) => current === item.id ? null : item.id)}
+                onHideActions={() => setInlineActionMessageId((current) => current === item.id ? null : current)}
+                onMore={() => setActionMsg(item)}
+                onEdit={() => startEdit(item)}
                 onRegenerate={() => doRegenerate(item)}
                 onCopy={() => copyMsg(item)}
                 onQuote={() => quoteMsg(item)}
@@ -1359,10 +1364,14 @@ function MessageBubble({
   msg,
   copied,
   highlighted,
+  actionsVisible,
   userAvatarUri,
   assistantAvatarUri,
   actionsDisabled,
-  onLongPress,
+  onToggleActions,
+  onHideActions,
+  onMore,
+  onEdit,
   onRegenerate,
   onCopy,
   onQuote,
@@ -1371,10 +1380,14 @@ function MessageBubble({
   msg: Message;
   copied: boolean;
   highlighted: boolean;
+  actionsVisible: boolean;
   userAvatarUri?: string;
   assistantAvatarUri?: string;
   actionsDisabled: boolean;
-  onLongPress: () => void;
+  onToggleActions: () => void;
+  onHideActions: () => void;
+  onMore: () => void;
+  onEdit: () => void;
   onRegenerate: () => void;
   onCopy: () => void;
   onQuote: () => void;
@@ -1400,7 +1413,8 @@ function MessageBubble({
   const isAssistant = msg.role === 'assistant';
   const streaming = msg.status === 'streaming';
   const tokenCount = useMemo(() => estimateTokenCount(msg.content), [msg.content]);
-  const showActions = isAssistant && !streaming && !!msg.content;
+  const canShowActions = !!msg.content && (!isAssistant || !streaming);
+  const showTokenCount = isAssistant && !streaming && !!msg.content;
   if (msg.topicBoundary) {
     return <TopicBoundary createdAt={msg.createdAt} />;
   }
@@ -1432,6 +1446,8 @@ function MessageBubble({
             ],
           },
         ]}
+        onPointerEnter={canShowActions ? onToggleActions : undefined}
+        onPointerLeave={canShowActions ? onHideActions : undefined}
       >
         <Pressable
           style={[
@@ -1439,8 +1455,11 @@ function MessageBubble({
             isUser ? styles.userBubble : styles.aiBubble,
             highlighted && styles.bubbleHighlighted,
           ]}
-          onLongPress={onLongPress}
+          onPress={canShowActions ? onToggleActions : undefined}
+          onLongPress={canShowActions ? onToggleActions : undefined}
           delayLongPress={350}
+          onHoverIn={canShowActions ? onToggleActions : undefined}
+          onHoverOut={canShowActions ? onHideActions : undefined}
         >
           {msg.quote && (
             <View style={styles.messageQuoteBar}>
@@ -1478,44 +1497,71 @@ function MessageBubble({
             <Text style={styles.bubbleErr}>⚠ {msg.error}</Text>
           )}
         </Pressable>
-        {showActions && (
-          <View style={styles.answerActions}>
-            <Text style={styles.tokenCount}>≈{tokenCount} tokens</Text>
+        {showTokenCount && <Text style={styles.tokenCount}>≈{tokenCount} tokens</Text>}
+        {actionsVisible && canShowActions && (
+          <Animated.View
+            style={[styles.answerActions, isUser ? styles.answerActionsRight : styles.answerActionsLeft]}
+            onPointerEnter={onToggleActions}
+            onPointerLeave={onHideActions}
+          >
+            {isAssistant ? (
+              <MotionPressable
+                style={[styles.answerAction, actionsDisabled && styles.answerActionDisabled]}
+                onPress={() => { onRegenerate(); onHideActions(); }}
+                disabled={actionsDisabled}
+                accessibilityLabel="重新生成回答"
+                accessibilityRole="button"
+                hitSlop={6}
+              >
+                <AppIcon name="retry" size={18} color={theme.textSecondary} />
+              </MotionPressable>
+            ) : (
+              <MotionPressable
+                style={[styles.answerAction, actionsDisabled && styles.answerActionDisabled]}
+                onPress={() => { onEdit(); onHideActions(); }}
+                disabled={actionsDisabled}
+                accessibilityLabel="编辑并重发消息"
+                accessibilityRole="button"
+                hitSlop={6}
+              >
+                <AppIcon name="edit" size={18} color={theme.textSecondary} />
+              </MotionPressable>
+            )}
             <MotionPressable
               style={[styles.answerAction, actionsDisabled && styles.answerActionDisabled]}
-              onPress={onRegenerate}
+              onPress={() => { onCopy(); onHideActions(); }}
               disabled={actionsDisabled}
-              accessibilityLabel="重新生成回答"
-              accessibilityRole="button"
-              hitSlop={6}
-            >
-              <AppIcon name="retry" size={16} color={theme.textSecondary} />
-            </MotionPressable>
-            <MotionPressable
-              style={[styles.answerAction, actionsDisabled && styles.answerActionDisabled]}
-              onPress={onCopy}
-              disabled={actionsDisabled}
-              accessibilityLabel={copied ? '已复制回答' : '复制回答'}
+              accessibilityLabel={copied ? '已复制内容' : '复制内容'}
               accessibilityRole="button"
               hitSlop={6}
             >
               <AppIcon
                 name={copied ? 'check' : 'copy'}
-                size={16}
+                size={18}
                 color={copied ? theme.primary : theme.textSecondary}
               />
             </MotionPressable>
             <MotionPressable
               style={[styles.answerAction, actionsDisabled && styles.answerActionDisabled]}
-              onPress={onQuote}
+              onPress={() => { onQuote(); onHideActions(); }}
               disabled={actionsDisabled}
-              accessibilityLabel="引用回答"
+              accessibilityLabel="引用内容"
               accessibilityRole="button"
               hitSlop={6}
             >
-              <AppIcon name="quote" size={16} color={theme.textSecondary} />
+              <AppIcon name="quote" size={18} color={theme.textSecondary} />
             </MotionPressable>
-          </View>
+            <MotionPressable
+              style={[styles.answerAction, actionsDisabled && styles.answerActionDisabled]}
+              onPress={() => { onMore(); onHideActions(); }}
+              disabled={actionsDisabled}
+              accessibilityLabel="更多消息操作"
+              accessibilityRole="button"
+              hitSlop={6}
+            >
+              <AppIcon name="more" size={18} color={theme.textSecondary} />
+            </MotionPressable>
+          </Animated.View>
         )}
       </Animated.View>
       {isUser && <MessageAvatar uri={userAvatarUri} fallback="我" />}
@@ -2086,11 +2132,23 @@ function createStyles(theme: ThemeColors) {
       flexDirection: 'row',
       alignItems: 'center',
       flexWrap: 'wrap',
-      gap: 3,
-      marginTop: 4,
-      paddingHorizontal: 2,
+      gap: 1,
+      marginTop: 5,
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: theme.border,
+      borderRadius: 22,
+      backgroundColor: theme.surface,
+      shadowColor: '#000',
+      shadowOpacity: 0.06,
+      shadowRadius: 5,
+      shadowOffset: { width: 0, height: 1 },
+      elevation: 1,
       maxWidth: '100%',
     },
+    answerActionsRight: { alignSelf: 'flex-end' },
+    answerActionsLeft: { alignSelf: 'flex-start' },
     tokenCount: {
       fontSize: 11,
       color: theme.textTertiary,
@@ -2098,11 +2156,11 @@ function createStyles(theme: ThemeColors) {
       fontVariant: ['tabular-nums'],
     },
     answerAction: {
-      width: 32,
-      height: 32,
+      width: 34,
+      height: 34,
       alignItems: 'center',
       justifyContent: 'center',
-      borderRadius: 16,
+      borderRadius: 17,
     },
     answerActionDisabled: { opacity: 0.45 },
     codeWrap: {
