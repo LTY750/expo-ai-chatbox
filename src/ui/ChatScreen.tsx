@@ -609,9 +609,19 @@ export default function ChatScreen({
           </MotionPressable>
           <View style={styles.headerSide} />
         </View>
-        <Text style={styles.headerTitle} numberOfLines={1}>
-          {title}
-        </Text>
+        <View style={styles.headerTitleWrap}>
+          <Text style={styles.headerTitle} numberOfLines={1}>
+            {title}
+          </Text>
+          <MotionPressable
+            style={styles.headerTitleEdit}
+            onPress={() => setConversationMenu(true)}
+            hitSlop={7}
+            accessibilityLabel="编辑当前对话"
+          >
+            <AppIcon name="edit" size={15} color={theme.textSecondary} />
+          </MotionPressable>
+        </View>
         <View style={styles.headerActions}>
           <MotionPressable
             onPress={() => setSearchOpen(true)}
@@ -1956,13 +1966,27 @@ function createStyles(theme: ThemeColors) {
       justifyContent: 'center',
     },
     headerActions: { flexDirection: 'row', alignItems: 'center' },
-    headerTitle: {
+    headerTitleWrap: {
       flex: 1,
-      textAlign: 'center',
-      fontSize: 16,
-      fontWeight: '600',
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      minWidth: 0,
       marginHorizontal: 8,
+    },
+    headerTitle: {
+      textAlign: 'center',
+      fontSize: 17,
+      fontWeight: '700',
       color: theme.textPrimary,
+      flexShrink: 1,
+    },
+    headerTitleEdit: {
+      width: 28,
+      height: 28,
+      marginLeft: 2,
+      alignItems: 'center',
+      justifyContent: 'center',
     },
     banner: { backgroundColor: theme.bannerBg, padding: 10 },
     bannerText: { color: theme.bannerText, textAlign: 'center' },
@@ -1994,20 +2018,20 @@ function createStyles(theme: ThemeColors) {
     },
     edgeFeedbackTop: { top: 0 },
     edgeFeedbackBottom: { bottom: 0 },
-    listContent: { padding: 12 },
+    listContent: { paddingHorizontal: 14, paddingTop: 12, paddingBottom: 10 },
     empty: { textAlign: 'center', color: theme.textTertiary, marginTop: 40 },
-    bubbleRow: { marginVertical: 5, flexDirection: 'row', alignItems: 'flex-end', gap: 7 },
+    bubbleRow: { marginVertical: 8, flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
     rowLeft: { justifyContent: 'flex-start' },
     rowRight: { justifyContent: 'flex-end' },
     messageColumn: { maxWidth: '84%', flexShrink: 1 },
     messageColumnLeft: { alignItems: 'stretch', width: '84%' },
     messageColumnRight: { alignItems: 'flex-end' },
-    assistantAvatarSlot: { alignSelf: 'flex-start', marginTop: 3 },
-    messageAvatar: { width: 30, height: 30, borderRadius: 15, backgroundColor: theme.surfaceVariant },
+    assistantAvatarSlot: { alignSelf: 'flex-start', marginTop: 4 },
+    messageAvatar: { width: 34, height: 34, borderRadius: 17, backgroundColor: theme.surfaceVariant },
     messageAvatarFallback: {
-      width: 30,
-      height: 30,
-      borderRadius: 15,
+      width: 34,
+      height: 34,
+      borderRadius: 17,
       alignItems: 'center',
       justifyContent: 'center',
       backgroundColor: theme.primaryLight,
@@ -2015,10 +2039,10 @@ function createStyles(theme: ThemeColors) {
       borderColor: theme.border,
     },
     messageAvatarText: { color: theme.primary, fontSize: 11, fontWeight: '700' },
-    bubble: { maxWidth: '100%', borderRadius: 14, paddingHorizontal: 12, paddingVertical: 8 },
+    bubble: { maxWidth: '100%', borderRadius: 18, paddingHorizontal: 15, paddingVertical: 11 },
     bubbleHighlighted: { borderWidth: 2, borderColor: theme.primary },
-    userBubble: { backgroundColor: theme.surfaceVariant, borderBottomRightRadius: 5 },
-    aiBubble: { backgroundColor: 'transparent', paddingHorizontal: 2, paddingVertical: 3 },
+    userBubble: { backgroundColor: theme.userBubble, borderBottomRightRadius: 6, paddingHorizontal: 16 },
+    aiBubble: { backgroundColor: 'transparent', paddingHorizontal: 2, paddingVertical: 2 },
     topicBoundary: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -2037,8 +2061,8 @@ function createStyles(theme: ThemeColors) {
       backgroundColor: theme.primaryLight,
     },
     topicText: { color: theme.primary, fontSize: 11, fontWeight: '600' },
-    bubbleText: { fontSize: 15, lineHeight: 21, color: theme.aiBubbleText },
-    userText: { color: theme.textPrimary },
+    bubbleText: { fontSize: 15, lineHeight: 22, color: theme.aiBubbleText },
+    userText: { color: theme.userBubbleText },
     messageQuoteBar: {
       minWidth: 0,
       flexDirection: 'row',
@@ -2241,18 +2265,18 @@ function createStyles(theme: ThemeColors) {
       fontFamily: RNPlatform.OS === 'ios' ? 'Menlo' : 'monospace',
     },
     composerShell: {
-      marginHorizontal: 10,
-      marginTop: 6,
+      marginHorizontal: 12,
+      marginTop: 8,
       borderWidth: 1,
       borderColor: theme.border,
-      borderRadius: 22,
+      borderRadius: 24,
       overflow: 'hidden',
-      backgroundColor: theme.surface,
+      backgroundColor: theme.inputBg,
       shadowColor: '#000',
-      shadowOpacity: 0.05,
-      shadowRadius: 8,
-      shadowOffset: { width: 0, height: 2 },
-      elevation: 1,
+      shadowOpacity: 0.08,
+      shadowRadius: 12,
+      shadowOffset: { width: 0, height: 3 },
+      elevation: 2,
     },
     composerQuoteBar: {
       minWidth: 0,
@@ -2408,9 +2432,9 @@ function createStyles(theme: ThemeColors) {
     toolBar: {
       flexDirection: 'row',
       alignItems: 'center',
-      paddingHorizontal: 12,
-      paddingTop: 2,
-      paddingBottom: 7,
+      paddingHorizontal: 16,
+      paddingTop: 3,
+      paddingBottom: 8,
       backgroundColor: theme.background,
     },
     toolSpacer: { flex: 1 },
@@ -2424,9 +2448,9 @@ function createStyles(theme: ThemeColors) {
     webBtn: {
       flexDirection: 'row',
       alignItems: 'center',
-      paddingHorizontal: 10,
-      paddingVertical: 5,
-      borderRadius: 16,
+      paddingHorizontal: 11,
+      paddingVertical: 6,
+      borderRadius: 18,
       borderWidth: 1,
       borderColor: theme.border,
       backgroundColor: theme.background,
@@ -2444,11 +2468,11 @@ function createStyles(theme: ThemeColors) {
     reasoningBtn: {
       flexDirection: 'row',
       alignItems: 'center',
-      minHeight: 30,
+      minHeight: 34,
       marginLeft: 6,
       paddingHorizontal: 8,
       paddingVertical: 5,
-      borderRadius: 15,
+      borderRadius: 17,
       borderWidth: 1,
       borderColor: theme.border,
       backgroundColor: theme.background,
@@ -2521,16 +2545,16 @@ function createStyles(theme: ThemeColors) {
     modelBtn: {
       flexDirection: 'row',
       alignItems: 'center',
-      maxWidth: 124,
-      height: 34,
-      paddingHorizontal: 9,
+      maxWidth: 142,
+      height: 36,
+      paddingHorizontal: 11,
       marginLeft: 7,
       borderWidth: 1,
       borderColor: theme.border,
-      borderRadius: 17,
+      borderRadius: 18,
       backgroundColor: theme.surfaceVariant,
     },
-    modelBtnText: { fontSize: 12, color: theme.textPrimary, flexShrink: 1 },
+    modelBtnText: { fontSize: 13, fontWeight: '600', color: theme.textPrimary, flexShrink: 1 },
     modelBtnCaret: { fontSize: 10, color: theme.textSecondary, marginLeft: 2 },
     input: {
       flex: 1,
