@@ -27,9 +27,9 @@
 - 消息级操作：长按复制 / 编辑重发 / 重新生成 / 删除
 - Markdown 渲染 + 代码块折叠 + 代码一键复制
 - LaTeX 数学公式渲染（MathView）+ Mermaid 图表渲染（MermaidView），CDN 依赖锁定精确版本并限制 WebView 导航
-- 文档解析：txt/md/csv 本地读取 + 图片 OCR（DeepSeek-OCR）+ LlamaParse / 阿里云文档解析（大模型版）（PDF / Word / PPT / Excel）
+- 文档解析：txt/md/csv 等纯文本优先本地读取；本地无法读取的文件和 PDF / Word / PPT / Excel 走 LlamaParse；图片使用视觉 OCR（DeepSeek-OCR）
 - 设置页分栏：模型提供商 / 文档解析 / 联网搜索 / 外观 / 全局提示词
-- 联网搜索（Tavily，做成模型可调用的工具），支持 basic / advanced 搜索深度与额度提示
+- 联网搜索（Tavily 或 Bocha，做成模型可调用的工具）；Tavily 支持 basic / advanced 搜索深度
 - 每个服务商/模型独立配置上下文窗口，界面显示估算占用量并为自动压缩预留输出空间
 - 深色模式（跟随系统 / 浅 / 深）
 - 解析内容注入对话上下文
@@ -38,7 +38,7 @@
 ## 当前开发状态
 
 核心聊天、多服务商、本地文档解析、LaTeX 与 Mermaid 已在 Android 模拟器实测通过。
-Tavily、LlamaParse 和阿里云文档解析仍需配置各自的真实凭据做端到端验收。
+Tavily、Bocha 和 LlamaParse 仍需配置各自的真实凭据做端到端验收。
 处于自用阶段，尚未发布。
 
 <!-- PLACEHOLDER -->
@@ -57,22 +57,8 @@ npm run android
 
 需要在手机/模拟器安装 **Expo Go**，扫码或通过开发服务器加载。
 首次使用进「设置」填写至少一个模型提供商的 API Key（如硅基流动）。PDF / Word / PPT / Excel
-可在「文档解析」里选择 LlamaParse 或阿里云文档解析（大模型版），并配置对应 Key。
+会在「文档解析」里通过 LlamaParse 解析并需要配置对应 Key；TXT、Markdown、CSV、JSON 等纯文本会优先在本地读取。
 图片 OCR 需在同一区域填写 OCR 的 baseURL / 模型 / Key。
-
-### 阿里云文档解析（大模型版）
-
-Expo 客户端无法直接使用阿里云官方 SDK 的 `SubmitDocParserJobAdvance`
-本地文件流上传能力。当前实现采用官方 URL 文件上传链路：
-
-1. 将手机本地文件临时上传到私有 OSS Bucket；
-2. 生成短期有效的签名 URL；
-3. 调用文档解析（大模型版）`SubmitDocParserJob`，把签名 URL 作为 `FileUrl`；
-4. 轮询解析状态并拉取 Markdown 结果；
-5. 解析完成后尝试删除 OSS 临时文件。
-
-需要在「设置 → 文档解析」里配置 RAM AccessKey、OSS Bucket、OSS Endpoint、Region 和临时文件前缀。
-建议 OSS Bucket 使用私有读写权限，并配置生命周期规则自动删除 `chatbox-docs/` 下的临时文件。
 
 类型检查：
 

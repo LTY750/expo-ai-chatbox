@@ -94,6 +94,8 @@ export default function ChatScreen({
   const webSearchEnabled = useChatStore((s) => s.webSearchEnabled);
   const searching = useChatStore((s) => s.searching);
   const tavilyReady = useChatStore((s) => s.tavilyReady);
+  const bochaReady = useChatStore((s) => s.bochaReady);
+  const webSearchProvider = useChatStore((s) => s.settings.webSearchProvider);
   const toggleWebSearch = useChatStore((s) => s.toggleWebSearch);
 
   const currentSession = sessions.find((x) => x.id === currentSessionId) ?? null;
@@ -962,9 +964,11 @@ export default function ChatScreen({
           <AppIcon name="chevronDown" size={14} color={theme.textSecondary} />
         </MotionPressable>
       </View>
-      {webSearchEnabled && !tavilyReady && (
+      {webSearchEnabled && !(webSearchProvider === 'bocha' ? bochaReady : tavilyReady) && (
         <MotionPressable style={styles.webWarn} onPress={onOpenSettings} pressScale={0.98}>
-          <Text style={styles.webWarnText}>未配置 Tavily Key，点这里去设置 →</Text>
+          <Text style={styles.webWarnText}>
+            {`未配置 ${webSearchProvider === 'bocha' ? 'Bocha' : 'Tavily'} Key，点这里去设置 →`}
+          </Text>
         </MotionPressable>
       )}
 
@@ -975,7 +979,7 @@ export default function ChatScreen({
       >
         <MotionPressable style={styles.menuItem} onPress={pickDocument}>
           <AppIcon name="document" size={21} color={theme.primary} />
-          <Text style={styles.menuText}>选择文件（txt / md / csv）</Text>
+          <Text style={styles.menuText}>选择文件（文本 / PDF / Word / PPT / Excel）</Text>
         </MotionPressable>
         <MotionPressable style={styles.menuItem} onPress={pickImage}>
           <AppIcon name="image" size={21} color={theme.primary} />

@@ -94,8 +94,9 @@ export interface Session {
 
 // API 协议类型 —— 决定用哪套请求/解析逻辑
 export type ProviderType = 'openai' | 'anthropic';
-export type DocumentParserProvider = 'llamaparse' | 'aliyun';
+export type DocumentParserProvider = 'llamaparse';
 export type TavilySearchDepth = 'basic' | 'advanced';
+export type WebSearchProvider = 'tavily' | 'bocha';
 export type AutoTitleMode = 'local' | 'ai';
 
 // 一个 API 服务商：下挂多个模型；key 不在这里，存 SecureStore
@@ -127,21 +128,11 @@ export interface AppSettings {
   // PDF / Word / PPT / Excel 等文档解析服务
   documentParser: {
     provider: DocumentParserProvider;
-    aliyun: {
-      endpoint: string;
-      llmEnhancement: boolean;
-      enhancementMode: '' | 'VLM';
-      oss: {
-        bucket: string;
-        endpoint: string;
-        region: string;
-        prefix: string;
-        urlExpiresSeconds: number;
-      };
-    };
   };
   // Tavily 搜索深度：basic 每次 1 credit，advanced 每次 2 credits
   tavilySearchDepth: TavilySearchDepth;
+  // 联网搜索只支持用户自己的 Tavily / Bocha 服务
+  webSearchProvider: WebSearchProvider;
   // 主题模式
   theme: ThemeMode;
 }

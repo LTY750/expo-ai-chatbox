@@ -11,14 +11,13 @@ import {
 } from 'react-native';
 import { useChatStore } from '../store';
 import {
-  getAliyunAccessKeyId,
-  getAliyunAccessKeySecret,
   getLlamaParseKey,
   getOcrKey,
   getTavilyKey,
+  getBochaKey,
 } from '../settings';
 import { useTheme, type ThemeColors, type ThemeMode } from '../theme';
-import type { AutoTitleMode, DocumentParserProvider, TavilySearchDepth } from '../types';
+import type { AutoTitleMode, TavilySearchDepth, WebSearchProvider } from '../types';
 import ProviderDetailScreen from './ProviderDetailScreen';
 import { AppIcon, type AppIconName } from './AppIcon';
 import { MotionPressable } from './MotionPressable';
@@ -181,12 +180,14 @@ function SettingsHome({ onOpen }: { onOpen: (p: Page) => void }) {
   const styles = useMemo(() => createStyles(theme), [theme]);
   const providers = useChatStore((s) => s.settings.providers);
   const currentProviderId = useChatStore((s) => s.settings.currentProviderId);
-  const docParser = useChatStore((s) => s.settings.documentParser.provider);
+  const llamaparseReady = useChatStore((s) => s.llamaparseReady);
   const temperature = useChatStore((s) => s.settings.temperature);
   const topP = useChatStore((s) => s.settings.topP);
   const autoTitleMode = useChatStore((s) => s.settings.autoTitleMode);
   const tavilySearchDepth = useChatStore((s) => s.settings.tavilySearchDepth);
+  const webSearchProvider = useChatStore((s) => s.settings.webSearchProvider);
   const tavilyReady = useChatStore((s) => s.tavilyReady);
+  const bochaReady = useChatStore((s) => s.bochaReady);
   const current = providers.find((p) => p.id === currentProviderId);
 
   return (
@@ -200,16 +201,20 @@ function SettingsHome({ onOpen }: { onOpen: (p: Page) => void }) {
       <NavRow
         icon="document"
         title="文档解析"
-        subtitle={docParser === 'aliyun' ? '阿里云文档解析（大模型版）' : 'LlamaParse'}
+        subtitle={
+          llamaparseReady
+            ? '本地优先 · LlamaParse 回退'
+            : '本地文本可用 · LlamaParse 未配置'
+        }
         onPress={() => onOpen('documents')}
       />
       <NavRow
         icon="search"
         title="联网搜索"
         subtitle={
-          tavilyReady
-            ? `Tavily 已配置 · ${tavilySearchDepth === 'advanced' ? '高级搜索' : '基础搜索'}`
-            : 'Tavily 未配置'
+          webSearchProvider === 'bocha'
+            ? bochaReady ? 'Bocha 已配置' : 'Bocha 未配置'
+            : tavilyReady ? `Tavily 已配置 · ${tavilySearchDepth === 'advanced' ? '高级搜索' : '基础搜索'}` : 'Tavily 未配置'
         }
         onPress={() => onOpen('search')}
       />
@@ -296,27 +301,14 @@ function DocumentParsingScreen() {
   const updateOcr = useChatStore((s) => s.updateOcr);
   const saveOcrKey = useChatStore((s) => s.saveOcrKey);
   const saveLlamaParseKey = useChatStore((s) => s.saveLlamaParseKey);
-  const saveAliyunDocKeys = useChatStore((s) => s.saveAliyunDocKeys);
-
-  const [parser, setParser] = useState<DocumentParserProvider>(settings.documentParser.provider);
   const [ocrURL, setOcrURL] = useState(settings.ocr.baseURL);
   const [ocrModel, setOcrModel] = useState(settings.ocr.model);
   const [ocrKey, setOcrKey] = useState('');
   const [llamaParseKey, setLlamaParseKey] = useState('');
-  const [aliyunKeyId, setAliyunKeyId] = useState('');
-  const [aliyunSecret, setAliyunSecret] = useState('');
-  const [aliyunEndpoint, setAliyunEndpoint] = useState(settings.documentParser.aliyun.endpoint);
-  const [llmEnhancement, setLlmEnhancement] = useState(settings.documentParser.aliyun.llmEnhancement);
-  const [enhancementMode, setEnhancementMode] = useState(settings.documentParser.aliyun.enhancementMode);
-  const [ossBucket, setOssBucket] = useState(settings.documentParser.aliyun.oss.bucket);
-  const [ossEndpoint, setOssEndpoint] = useState(settings.documentParser.aliyun.oss.endpoint);
-  const [ossRegion, setOssRegion] = useState(settings.documentParser.aliyun.oss.region);
-  const [ossPrefix, setOssPrefix] = useState(settings.documentParser.aliyun.oss.prefix);
-  const [aliyunAdvancedOpen, setAliyunAdvancedOpen] = useState(false);
   const [keysLoaded, setKeysLoaded] = useState(false);
   const [keyLoadError, setKeyLoadError] = useState<string | null>(null);
   const [keyLoadAttempt, setKeyLoadAttempt] = useState(0);
-  const keyDirtyRef = useRef({ ocr: false, llama: false, aliyunId: false, aliyunSecret: false });
+  const keyDirtyRef = useRef({ ocr: false, llama: false });
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -328,15 +320,11 @@ function DocumentParsingScreen() {
     Promise.all([
       getOcrKey(),
       getLlamaParseKey(),
-      getAliyunAccessKeyId(),
-      getAliyunAccessKeySecret(),
     ])
-      .then(([ocr, llama, aliyunId, aliyunKeySecret]) => {
+      .then(([ocr, llama]) => {
         if (cancelled) return;
         if (!keyDirtyRef.current.ocr) setOcrKey(ocr ?? '');
         if (!keyDirtyRef.current.llama) setLlamaParseKey(llama ?? '');
-        if (!keyDirtyRef.current.aliyunId) setAliyunKeyId(aliyunId ?? '');
-        if (!keyDirtyRef.current.aliyunSecret) setAliyunSecret(aliyunKeySecret ?? '');
         setKeysLoaded(true);
       })
       .catch((error: unknown) => {
@@ -356,27 +344,10 @@ function DocumentParsingScreen() {
     try {
       await updateOcr({ baseURL: ocrURL.trim(), model: ocrModel.trim() });
       if (keyDirtyRef.current.ocr) await saveOcrKey(ocrKey);
-      await updateSettings({
-        documentParser: {
-          provider: parser,
-          aliyun: {
-            endpoint: aliyunEndpoint.trim() || 'docmind-api.cn-hangzhou.aliyuncs.com',
-            llmEnhancement,
-            enhancementMode,
-            oss: {
-              bucket: ossBucket.trim(),
-              endpoint: ossEndpoint.trim() || 'oss-cn-hangzhou.aliyuncs.com',
-              region: ossRegion.trim() || 'cn-hangzhou',
-              prefix: ossPrefix.trim() || 'chatbox-docs/',
-              urlExpiresSeconds: 600,
-            },
-          },
-        },
-      });
       if (keyDirtyRef.current.llama) await saveLlamaParseKey(llamaParseKey);
-      if (keyDirtyRef.current.aliyunId || keyDirtyRef.current.aliyunSecret) {
-        await saveAliyunDocKeys(aliyunKeyId, aliyunSecret);
-      }
+      await updateSettings({
+        documentParser: { ...settings.documentParser, provider: 'llamaparse' },
+      });
       setSaved(true);
       setTimeout(() => setSaved(false), 1500);
     } catch (error: unknown) {
@@ -420,252 +391,28 @@ function DocumentParsingScreen() {
           </View>
         </View>
 
-        <Text style={styles.fieldLabel}>选择解析服务</Text>
-        <View style={styles.parserOptions}>
-          <MotionPressable
-            accessibilityRole="radio"
-            accessibilityState={{ selected: parser === 'llamaparse' }}
-            style={[
-              styles.parserOption,
-              parser === 'llamaparse' && styles.parserOptionActive,
-            ]}
-            onPress={() => setParser('llamaparse')}
-          >
-            <View
-              style={[
-                styles.parserMark,
-                parser === 'llamaparse' && styles.parserMarkActive,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.parserMarkText,
-                  parser === 'llamaparse' && styles.parserMarkTextActive,
-                ]}
-              >
-                LP
-              </Text>
-            </View>
-            <View style={styles.parserOptionBody}>
-              <Text style={styles.parserOptionName}>LlamaParse</Text>
-              <Text style={styles.parserOptionDescription}>配置简单，直接上传并返回 Markdown</Text>
-            </View>
-            <View
-              style={[
-                styles.parserRadio,
-                parser === 'llamaparse' && styles.parserRadioActive,
-              ]}
-            >
-              {parser === 'llamaparse' && <View style={styles.parserRadioDot} />}
-            </View>
-          </MotionPressable>
-
-          <MotionPressable
-            accessibilityRole="radio"
-            accessibilityState={{ selected: parser === 'aliyun' }}
-            style={[styles.parserOption, parser === 'aliyun' && styles.parserOptionActive]}
-            onPress={() => setParser('aliyun')}
-          >
-            <View
-              style={[styles.parserMark, parser === 'aliyun' && styles.parserMarkActive]}
-            >
-              <Text
-                style={[
-                  styles.parserMarkText,
-                  parser === 'aliyun' && styles.parserMarkTextActive,
-                ]}
-              >
-                云
-              </Text>
-            </View>
-            <View style={styles.parserOptionBody}>
-              <Text style={styles.parserOptionName}>阿里云文档解析</Text>
-              <Text style={styles.parserOptionDescription}>国内服务，需要 OSS 临时中转文件</Text>
-            </View>
-            <View
-              style={[styles.parserRadio, parser === 'aliyun' && styles.parserRadioActive]}
-            >
-              {parser === 'aliyun' && <View style={styles.parserRadioDot} />}
-            </View>
-          </MotionPressable>
+        <View style={styles.parserConfig}>
+          <Text style={styles.configEyebrow}>本地优先 · LLAMAPARSE 回退</Text>
+          <Text style={styles.configTitle}>文件解析</Text>
+          <Text style={styles.configDescription}>
+            TXT、Markdown、CSV、JSON 等纯文本先在手机本地读取；本地无法读取的文件，再上传到 LlamaParse 解析。
+          </Text>
+          <Text style={styles.fieldLabel}>LlamaParse API Key</Text>
+          <TextInput
+            style={[styles.input, (!keysLoaded || saving) && styles.disabled]}
+            value={llamaParseKey}
+            onChangeText={(value) => {
+              keyDirtyRef.current.llama = true;
+              setLlamaParseKey(value);
+            }}
+            placeholder="llx-..."
+            placeholderTextColor={theme.placeholder}
+            secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
+            editable={keysLoaded && !saving}
+          />
         </View>
-
-        {parser === 'llamaparse' ? (
-          <View style={styles.parserConfig}>
-            <Text style={styles.configEyebrow}>LLAMAPARSE 配置</Text>
-            <Text style={styles.configTitle}>云端文档解析</Text>
-            <Text style={styles.configDescription}>
-              适合快速解析常见办公文档，解析结果会以 Markdown 加入对话。
-            </Text>
-            <Text style={styles.fieldLabel}>API Key</Text>
-            <TextInput
-              style={[styles.input, (!keysLoaded || saving) && styles.disabled]}
-              value={llamaParseKey}
-              onChangeText={(value) => {
-                keyDirtyRef.current.llama = true;
-                setLlamaParseKey(value);
-              }}
-              placeholder="llx-..."
-              placeholderTextColor={theme.placeholder}
-              secureTextEntry
-              autoCapitalize="none"
-              autoCorrect={false}
-              editable={keysLoaded && !saving}
-            />
-          </View>
-        ) : (
-          <View style={styles.parserConfig}>
-            <Text style={styles.configEyebrow}>阿里云配置</Text>
-            <Text style={styles.configTitle}>文档智能（大模型版）</Text>
-            <Text style={styles.configDescription}>
-              手机文件会临时上传到你的 OSS，解析完成后应用会尝试删除临时文件。
-            </Text>
-
-            <Text style={styles.fieldLabel}>AccessKey ID</Text>
-            <TextInput
-              style={[styles.input, (!keysLoaded || saving) && styles.disabled]}
-              value={aliyunKeyId}
-              onChangeText={(value) => {
-                keyDirtyRef.current.aliyunId = true;
-                setAliyunKeyId(value);
-              }}
-              placeholder="LTAI..."
-              placeholderTextColor={theme.placeholder}
-              secureTextEntry
-              autoCapitalize="none"
-              autoCorrect={false}
-              editable={keysLoaded && !saving}
-            />
-            <Text style={styles.fieldLabel}>AccessKey Secret</Text>
-            <TextInput
-              style={[styles.input, (!keysLoaded || saving) && styles.disabled]}
-              value={aliyunSecret}
-              onChangeText={(value) => {
-                keyDirtyRef.current.aliyunSecret = true;
-                setAliyunSecret(value);
-              }}
-              placeholder="AccessKey Secret"
-              placeholderTextColor={theme.placeholder}
-              secureTextEntry
-              autoCapitalize="none"
-              autoCorrect={false}
-              editable={keysLoaded && !saving}
-            />
-
-            <View style={styles.configDivider} />
-            <Text style={styles.configSubTitle}>解析增强</Text>
-            <MotionPressable style={styles.checkRow} onPress={() => setLlmEnhancement((v) => !v)}>
-              <View style={[styles.checkBox, llmEnhancement && styles.checkBoxActive]}>
-                {llmEnhancement && <AppIcon name="check" size={15} color="#fff" />}
-              </View>
-              <View style={styles.checkContent}>
-                <Text style={styles.checkText}>启用大模型增强</Text>
-                <Text style={styles.checkDescription}>提升复杂版面和内容结构的解析效果</Text>
-              </View>
-            </MotionPressable>
-            {llmEnhancement && (
-              <View style={styles.segmentSmall}>
-                <MotionPressable
-                  style={[styles.segBtn, enhancementMode === '' && styles.segBtnActive]}
-                  onPress={() => setEnhancementMode('')}
-                >
-                  <Text style={[styles.segText, enhancementMode === '' && styles.segTextActive]}>
-                    基础链路
-                  </Text>
-                </MotionPressable>
-                <MotionPressable
-                  style={[styles.segBtn, enhancementMode === 'VLM' && styles.segBtnActive]}
-                  onPress={() => setEnhancementMode('VLM')}
-                >
-                  <Text
-                    style={[
-                      styles.segText,
-                      enhancementMode === 'VLM' && styles.segTextActive,
-                    ]}
-                  >
-                    VLM 增强
-                  </Text>
-                </MotionPressable>
-              </View>
-            )}
-
-            <View style={styles.configDivider} />
-            <Text style={styles.configSubTitle}>OSS 文件中转</Text>
-            <Text style={styles.configDescription}>Bucket 是阿里云解析手机本地文件的必要配置。</Text>
-            <Text style={styles.fieldLabel}>Bucket</Text>
-            <TextInput
-              style={styles.input}
-              value={ossBucket}
-              onChangeText={setOssBucket}
-              placeholder="chatbox-doc-parser-xxx"
-              placeholderTextColor={theme.placeholder}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-
-            <MotionPressable
-              accessibilityRole="button"
-              accessibilityState={{ expanded: aliyunAdvancedOpen }}
-              style={styles.advancedToggle}
-              onPress={() => setAliyunAdvancedOpen((open) => !open)}
-            >
-              <View style={styles.advancedToggleLabel}>
-                <AppIcon name="settings" size={18} color={theme.textSecondary} />
-                <Text style={styles.advancedToggleText}>高级设置</Text>
-              </View>
-              <AppIcon
-                name={aliyunAdvancedOpen ? 'collapse' : 'expand'}
-                size={19}
-                color={theme.textTertiary}
-              />
-            </MotionPressable>
-
-            {aliyunAdvancedOpen && (
-              <View style={styles.advancedFields}>
-                <Text style={styles.fieldLabel}>文档解析 Endpoint</Text>
-                <TextInput
-                  style={styles.input}
-                  value={aliyunEndpoint}
-                  onChangeText={setAliyunEndpoint}
-                  placeholder="docmind-api.cn-hangzhou.aliyuncs.com"
-                  placeholderTextColor={theme.placeholder}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-                <Text style={styles.fieldLabel}>OSS Endpoint</Text>
-                <TextInput
-                  style={styles.input}
-                  value={ossEndpoint}
-                  onChangeText={setOssEndpoint}
-                  placeholder="oss-cn-hangzhou.aliyuncs.com"
-                  placeholderTextColor={theme.placeholder}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-                <Text style={styles.fieldLabel}>Region</Text>
-                <TextInput
-                  style={styles.input}
-                  value={ossRegion}
-                  onChangeText={setOssRegion}
-                  placeholder="cn-hangzhou"
-                  placeholderTextColor={theme.placeholder}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-                <Text style={styles.fieldLabel}>临时文件前缀</Text>
-                <TextInput
-                  style={styles.input}
-                  value={ossPrefix}
-                  onChangeText={setOssPrefix}
-                  placeholder="chatbox-docs/"
-                  placeholderTextColor={theme.placeholder}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-              </View>
-            )}
-          </View>
-        )}
       </View>
 
       <View style={styles.settingsGroup}>
@@ -747,11 +494,14 @@ function SearchSettingsScreen() {
   const settings = useChatStore((s) => s.settings);
   const updateSettings = useChatStore((s) => s.updateSettings);
   const saveTavilyKey = useChatStore((s) => s.saveTavilyKey);
+  const saveBochaKey = useChatStore((s) => s.saveBochaKey);
+  const [provider, setProvider] = useState<WebSearchProvider>(settings.webSearchProvider);
   const [tavilyKey, setTavilyKey] = useState('');
+  const [bochaKey, setBochaKey] = useState('');
   const [keyLoaded, setKeyLoaded] = useState(false);
   const [keyLoadError, setKeyLoadError] = useState<string | null>(null);
   const [keyLoadAttempt, setKeyLoadAttempt] = useState(0);
-  const keyDirtyRef = useRef(false);
+  const keyDirtyRef = useRef({ tavily: false, bocha: false });
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -763,16 +513,17 @@ function SearchSettingsScreen() {
     let cancelled = false;
     setKeyLoaded(false);
     setKeyLoadError(null);
-    getTavilyKey()
-      .then((k) => {
+    Promise.all([getTavilyKey(), getBochaKey()])
+      .then(([tavily, bocha]) => {
         if (cancelled) return;
-        if (!keyDirtyRef.current) setTavilyKey(k ?? '');
+        if (!keyDirtyRef.current.tavily) setTavilyKey(tavily ?? '');
+        if (!keyDirtyRef.current.bocha) setBochaKey(bocha ?? '');
         setKeyLoaded(true);
       })
       .catch((error: unknown) => {
         if (cancelled) return;
         setKeyLoaded(false);
-        setKeyLoadError(`读取 Tavily API Key 失败：${errorMessage(error)}`);
+        setKeyLoadError(`读取联网搜索 API Key 失败：${errorMessage(error)}`);
       });
     return () => {
       cancelled = true;
@@ -784,12 +535,13 @@ function SearchSettingsScreen() {
     setSaving(true);
     setSaveError(null);
     try {
-      if (keyDirtyRef.current) await saveTavilyKey(tavilyKey);
-      await updateSettings({ tavilySearchDepth: searchDepth });
+      if (keyDirtyRef.current.tavily) await saveTavilyKey(tavilyKey);
+      if (keyDirtyRef.current.bocha) await saveBochaKey(bochaKey);
+      await updateSettings({ webSearchProvider: provider, tavilySearchDepth: searchDepth });
       setSaved(true);
       setTimeout(() => setSaved(false), 1500);
     } catch (error: unknown) {
-      setSaveError(`保存 Tavily 配置失败：${errorMessage(error)}`);
+      setSaveError(`保存联网搜索配置失败：${errorMessage(error)}`);
     } finally {
       setSaving(false);
     }
@@ -810,33 +562,32 @@ function SearchSettingsScreen() {
           </MotionPressable>
         </View>
       )}
-      <Text style={styles.section}>Tavily</Text>
-      <Text style={styles.hint}>开启聊天页联网搜索后，模型会在需要最新信息时调用 Tavily。</Text>
-      <Text style={styles.fieldLabel}>搜索深度</Text>
+      <Text style={styles.section}>搜索服务</Text>
+      <Text style={styles.hint}>开启聊天页联网搜索后，模型会调用这里选定的服务商。</Text>
+      <Text style={styles.fieldLabel}>当前服务商</Text>
       <View style={styles.segment}>
         {([
-          { value: 'basic', label: '基础 · 1 credit' },
-          { value: 'advanced', label: '高级 · 2 credits' },
+          { value: 'tavily', label: 'Tavily' },
+          { value: 'bocha', label: 'Bocha' },
         ] as const).map((option) => (
           <MotionPressable
             key={option.value}
-            style={[styles.segBtn, searchDepth === option.value && styles.segBtnActive]}
-            onPress={() => setSearchDepth(option.value)}
+            style={[styles.segBtn, provider === option.value && styles.segBtnActive]}
+            onPress={() => setProvider(option.value)}
             disabled={saving}
           >
-            <Text style={[styles.segText, searchDepth === option.value && styles.segTextActive]}>
+            <Text style={[styles.segText, provider === option.value && styles.segTextActive]}>
               {option.label}
             </Text>
           </MotionPressable>
         ))}
       </View>
-      <Text style={styles.hint}>基础搜索更省额度；高级搜索适合需要更高相关性的复杂问题。</Text>
-      <Text style={styles.fieldLabel}>API Key</Text>
+      <Text style={styles.fieldLabel}>Tavily API Key</Text>
       <TextInput
         style={[styles.input, (!keyLoaded || saving) && styles.disabled]}
         value={tavilyKey}
         onChangeText={(value) => {
-          keyDirtyRef.current = true;
+          keyDirtyRef.current.tavily = true;
           setTavilyKey(value);
         }}
         placeholder="tvly-..."
@@ -846,6 +597,47 @@ function SearchSettingsScreen() {
         autoCorrect={false}
         editable={keyLoaded && !saving}
       />
+      <Text style={styles.fieldLabel}>Bocha API Key</Text>
+      <TextInput
+        style={[styles.input, (!keyLoaded || saving) && styles.disabled]}
+        value={bochaKey}
+        onChangeText={(value) => {
+          keyDirtyRef.current.bocha = true;
+          setBochaKey(value);
+        }}
+        placeholder="Bocha API Key"
+        placeholderTextColor={theme.placeholder}
+        secureTextEntry
+        autoCapitalize="none"
+        autoCorrect={false}
+        editable={keyLoaded && !saving}
+      />
+      <Text style={styles.hint}>
+        当前使用：{provider === 'bocha' ? 'Bocha' : 'Tavily'}。未配置当前服务商 Key 时不会启用联网搜索。
+      </Text>
+      {provider === 'tavily' && (
+        <>
+          <Text style={styles.fieldLabel}>搜索深度</Text>
+          <View style={styles.segment}>
+            {([
+              { value: 'basic', label: '基础 · 1 credit' },
+              { value: 'advanced', label: '高级 · 2 credits' },
+            ] as const).map((option) => (
+              <MotionPressable
+                key={option.value}
+                style={[styles.segBtn, searchDepth === option.value && styles.segBtnActive]}
+                onPress={() => setSearchDepth(option.value)}
+                disabled={saving}
+              >
+                <Text style={[styles.segText, searchDepth === option.value && styles.segTextActive]}>
+                  {option.label}
+                </Text>
+              </MotionPressable>
+            ))}
+          </View>
+          <Text style={styles.hint}>基础搜索更省额度；高级搜索适合需要更高相关性的复杂问题。</Text>
+        </>
+      )}
       <MotionPressable
         style={[styles.saveBtn, (!keyLoaded || saving) && styles.disabled]}
         onPress={save}
@@ -854,7 +646,7 @@ function SearchSettingsScreen() {
         <View style={styles.inlineButton}>
           <AppIcon name="check" size={19} color="#fff" />
           <Text style={styles.saveText}>
-            {saving ? '保存中…' : saved ? '已保存' : '保存 Tavily 配置'}
+            {saving ? '保存中…' : saved ? '已保存' : '保存联网搜索配置'}
           </Text>
         </View>
       </MotionPressable>
@@ -1205,53 +997,6 @@ function createStyles(theme: ThemeColors) {
       color: theme.textTertiary,
       marginTop: 2,
     },
-    parserOptions: { gap: 9 },
-    parserOption: {
-      minHeight: 70,
-      flexDirection: 'row',
-      alignItems: 'center',
-      borderWidth: 1,
-      borderColor: theme.border,
-      borderRadius: 12,
-      paddingHorizontal: 11,
-      paddingVertical: 10,
-      backgroundColor: theme.inputBg,
-    },
-    parserOptionActive: {
-      borderColor: theme.primary,
-      backgroundColor: theme.primaryLight,
-    },
-    parserMark: {
-      width: 38,
-      height: 38,
-      borderRadius: 11,
-      alignItems: 'center',
-      justifyContent: 'center',
-      backgroundColor: theme.surfaceVariant,
-      marginRight: 10,
-    },
-    parserMarkActive: { backgroundColor: theme.primary },
-    parserMarkText: { fontSize: 13, fontWeight: '800', color: theme.textSecondary },
-    parserMarkTextActive: { color: '#fff' },
-    parserOptionBody: { flex: 1, paddingRight: 8 },
-    parserOptionName: { fontSize: 15, fontWeight: '700', color: theme.textPrimary },
-    parserOptionDescription: {
-      fontSize: 12,
-      lineHeight: 17,
-      color: theme.textSecondary,
-      marginTop: 2,
-    },
-    parserRadio: {
-      width: 20,
-      height: 20,
-      borderRadius: 10,
-      borderWidth: 1.5,
-      borderColor: theme.border,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    parserRadioActive: { borderColor: theme.primary },
-    parserRadioDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: theme.primary },
     parserConfig: {
       marginTop: 14,
       padding: 13,
@@ -1271,38 +1016,6 @@ function createStyles(theme: ThemeColors) {
       lineHeight: 18,
       color: theme.textSecondary,
       marginTop: 4,
-    },
-    configDivider: {
-      height: StyleSheet.hairlineWidth,
-      backgroundColor: theme.border,
-      marginTop: 16,
-      marginBottom: 13,
-    },
-    configSubTitle: { fontSize: 14, fontWeight: '700', color: theme.textPrimary },
-    checkContent: { flex: 1 },
-    checkDescription: {
-      fontSize: 12,
-      lineHeight: 17,
-      color: theme.textTertiary,
-      marginTop: 1,
-    },
-    advancedToggle: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      minHeight: 44,
-      marginTop: 12,
-      paddingHorizontal: 11,
-      borderWidth: 1,
-      borderColor: theme.border,
-      borderRadius: 10,
-      backgroundColor: theme.inputBg,
-    },
-    advancedToggleLabel: { flexDirection: 'row', alignItems: 'center', gap: 7 },
-    advancedToggleText: { fontSize: 13, fontWeight: '600', color: theme.textSecondary },
-    advancedFields: {
-      marginTop: 10,
-      paddingTop: 2,
     },
     serviceTag: {
       alignSelf: 'flex-start',
@@ -1368,36 +1081,10 @@ function createStyles(theme: ThemeColors) {
       borderRadius: 10,
       overflow: 'hidden',
     },
-    segmentSmall: {
-      flexDirection: 'row',
-      borderWidth: 1,
-      borderColor: theme.border,
-      borderRadius: 10,
-      overflow: 'hidden',
-      marginTop: 8,
-    },
     segBtn: { flex: 1, paddingVertical: 10, alignItems: 'center' },
     segBtnActive: { backgroundColor: theme.primary },
     segText: { fontSize: 14, color: theme.textPrimary },
     segTextActive: { color: '#fff', fontWeight: '600' },
-    checkRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      paddingVertical: 12,
-      marginTop: 2,
-    },
-    checkBox: {
-      width: 22,
-      height: 22,
-      borderRadius: 7,
-      borderWidth: 1,
-      borderColor: theme.border,
-      alignItems: 'center',
-      justifyContent: 'center',
-      marginRight: 8,
-    },
-    checkBoxActive: { backgroundColor: theme.primary, borderColor: theme.primary },
-    checkText: { fontSize: 14, color: theme.textPrimary },
     saveBtn: {
       backgroundColor: theme.primary,
       borderRadius: 10,

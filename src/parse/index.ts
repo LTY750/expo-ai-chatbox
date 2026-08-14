@@ -5,7 +5,6 @@ import { File } from 'expo-file-system';
 import * as FS from 'expo-file-system/legacy';
 import { ocrImage } from './ocr';
 import { parseDocument as llamaParseDocument } from './llamaparse';
-import { parseDocument as aliyunParseDocument } from './aliyun';
 
 // 上层传入的待解析文件（来自 document-picker / image-picker）
 export interface PickedFile {
@@ -25,25 +24,9 @@ export interface LlamaParseConfig {
   apiKey: string;
 }
 
-export interface AliyunDocParserConfig {
-  accessKeyId: string;
-  accessKeySecret: string;
-  endpoint: string;
-  llmEnhancement: boolean;
-  enhancementMode?: '' | 'VLM';
-  oss: {
-    bucket: string;
-    endpoint: string;
-    region: string;
-    prefix: string;
-    urlExpiresSeconds: number;
-  };
-}
-
 export interface DocumentParserConfig {
-  provider: 'llamaparse' | 'aliyun';
+  provider: 'llamaparse';
   llamaParse?: LlamaParseConfig;
-  aliyun?: AliyunDocParserConfig;
 }
 
 export interface ParseResult {
@@ -53,18 +36,6 @@ export interface ParseResult {
 
 const TEXT_EXT = ['txt', 'md', 'markdown', 'csv', 'json', 'log', 'xml', 'yaml', 'yml'];
 const IMAGE_EXT = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'heic'];
-// LlamaParse 支持的文档类型
-const DOC_EXT = ['pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'odt', 'odp', 'ods', 'rtf', 'epub'];
-const DOC_MIME_PREFIX = [
-  'application/pdf',
-  'application/msword',
-  'application/vnd.openxmlformats-officedocument',
-  'application/vnd.ms-excel',
-  'application/vnd.ms-powerpoint',
-  'application/vnd.oasis.opendocument',
-  'application/rtf',
-  'application/epub',
-];
 
 function ext(name: string): string {
   const i = name.lastIndexOf('.');
@@ -80,11 +51,6 @@ function isText(f: PickedFile): boolean {
   if (f.mimeType?.startsWith('text/')) return true;
   if (f.mimeType === 'application/json') return true;
   return TEXT_EXT.includes(ext(f.name));
-}
-
-function isDocument(f: PickedFile): boolean {
-  if (f.mimeType && DOC_MIME_PREFIX.some((p) => f.mimeType!.startsWith(p))) return true;
-  return DOC_EXT.includes(ext(f.name));
 }
 
 const MAX_TEXT_CHARS = 30000; // 防止爆上下文
@@ -113,45 +79,49 @@ export async function parseFile(
     return { kind: 'image', text };
   }
 
-  if (isDocument(f)) {
-    let text = '';
-    if (documentParser?.provider === 'aliyun') {
-      if (!documentParser.aliyun?.accessKeyId || !documentParser.aliyun.accessKeySecret) {
-        throw new Error('请先在设置里配置阿里云文档解析 AccessKey');
-      }
-      text = await aliyunParseDocument(f, documentParser.aliyun);
-    } else {
-      if (!documentParser?.llamaParse?.apiKey) {
-        throw new Error('请先在设置里配置 LlamaParse 的 API Key');
-      }
-      text = await llamaParseDocument(f, documentParser.llamaParse);
-    }
-    text = truncate(text);
-    return { kind: 'document', text };
-  }
-
   if (isText(f)) {
-    // 多策略尝试，谁成谁上，全程异步
-    const tries: Array<[string, () => Promise<string>]> = [
-      ['File.text', async () => await new File(f.uri).text()],
-      ['legacy', async () =>
-        await FS.readAsStringAsync(f.uri, { encoding: FS.EncodingType.UTF8 })],
-    ];
-    let lastErr = '';
-    for (const [tag, fn] of tries) {
-      try {
-        const text = await fn();
-        if (text) return { kind: 'text', text: truncate(text) };
-      } catch (e: any) {
-        lastErr = `${tag}: ${e?.message ?? e}`;
-      }
+    try {
+      // 普通文本优先在设备本地读取，避免不必要的上传和额度消耗。
+      return { kind: 'text', text: truncate(await readTextLocally(f)) };
+    } catch (error: any) {
+      // content:// 权限异常或编码问题时，交给 LlamaParse 兜底。
+      return parseWithLlama(f, documentParser, `本地读取失败：${error?.message ?? error}`);
     }
-    throw new Error('读取文件失败：' + lastErr);
   }
 
-  throw new Error(
-    `暂不支持的文件类型：${ext(f.name) || f.mimeType || '未知'}（当前支持 txt/md/csv 等文本、图片、PDF/Word/PPT 文档）`
-  );
+  // PDF、Office 文档以及未列出的文件类型统一交给 LlamaParse。
+  return parseWithLlama(f, documentParser);
+}
+
+async function readTextLocally(f: PickedFile): Promise<string> {
+  const tries: Array<[string, () => Promise<string>]> = [
+    ['File.text', async () => await new File(f.uri).text()],
+    ['legacy', async () =>
+      await FS.readAsStringAsync(f.uri, { encoding: FS.EncodingType.UTF8 })],
+  ];
+  const errors: string[] = [];
+  for (const [tag, fn] of tries) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      errors.push(`${tag}: ${error?.message ?? error}`);
+    }
+  }
+  throw new Error(errors.join('; '));
+}
+
+async function parseWithLlama(
+  f: PickedFile,
+  documentParser?: DocumentParserConfig,
+  localError?: string
+): Promise<ParseResult> {
+  const apiKey = documentParser?.llamaParse?.apiKey?.trim();
+  if (!apiKey) {
+    const suffix = localError ? `（${localError}）` : '';
+    throw new Error(`请先在设置里配置 LlamaParse 的 API Key${suffix}`);
+  }
+  const text = truncate(await llamaParseDocument(f, { apiKey }));
+  return { kind: isText(f) ? 'text' : 'document', text };
 }
 
 function truncate(s: string): string {

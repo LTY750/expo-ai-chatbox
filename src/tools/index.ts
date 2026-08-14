@@ -1,10 +1,11 @@
 // 工具注册 + 执行路由
 // 统一工具定义格式（内部用），各 Provider 负责转成自家协议格式
-// 执行器按工具名路由到具体实现（当前只有 web_search → Tavily）
+// 执行器按工具名路由到具体实现（联网搜索可选 Tavily 或 Bocha）
 
+import { bochaSearch, formatSearchResult } from './bocha';
 import { tavilySearch, formatTavilyResult } from './tavily';
 import type { ToolDef, ToolExecutor } from '../providers/base';
-import type { TavilySearchDepth } from '../types';
+import type { TavilySearchDepth, WebSearchProvider } from '../types';
 
 // 联网搜索工具定义
 export const WEB_SEARCH_TOOL: ToolDef = {
@@ -23,17 +24,30 @@ export const WEB_SEARCH_TOOL: ToolDef = {
   },
 };
 
-// 构造执行器：传入 Tavily key，返回一个按 name 路由的执行函数
-export function makeToolExecutor(
-  tavilyKey: string,
-  searchDepth: TavilySearchDepth = 'basic'
-): ToolExecutor {
+// 构造执行器：按设置的联网搜索服务商路由请求
+export interface WebSearchCredentials {
+  provider: WebSearchProvider;
+  tavilyKey?: string;
+  bochaKey?: string;
+  searchDepth?: TavilySearchDepth;
+}
+
+export function makeToolExecutor(credentials: WebSearchCredentials): ToolExecutor {
   return async (name: string, args: any, signal?: AbortSignal): Promise<string> => {
     if (name === 'web_search') {
       const query = typeof args?.query === 'string' ? args.query.trim() : '';
       if (!query) return '搜索失败：缺少 query 参数';
       try {
-        const result = await tavilySearch(tavilyKey, query, { searchDepth, signal });
+        if (credentials.provider === 'bocha') {
+          if (!credentials.bochaKey?.trim()) return '搜索失败：未配置 Bocha API Key';
+          const result = await bochaSearch(credentials.bochaKey, query, { signal });
+          return formatSearchResult(result, query);
+        }
+        if (!credentials.tavilyKey?.trim()) return '搜索失败：未配置 Tavily API Key';
+        const result = await tavilySearch(credentials.tavilyKey, query, {
+          searchDepth: credentials.searchDepth,
+          signal,
+        });
         return formatTavilyResult(result, query);
       } catch (e: any) {
         return `搜索失败：${e?.message ?? String(e)}`;

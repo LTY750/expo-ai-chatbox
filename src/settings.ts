@@ -55,26 +55,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
   ocr: { baseURL: SILICONFLOW_BASE_URL, model: 'deepseek-ai/DeepSeek-OCR' },
   documentParser: {
     provider: 'llamaparse',
-    aliyun: {
-      endpoint: 'docmind-api.cn-hangzhou.aliyuncs.com',
-      llmEnhancement: true,
-      enhancementMode: '',
-      oss: {
-        bucket: '',
-        endpoint: 'oss-cn-hangzhou.aliyuncs.com',
-        region: 'cn-hangzhou',
-        prefix: 'chatbox-docs/',
-        urlExpiresSeconds: 600,
-      },
-    },
   },
   tavilySearchDepth: 'basic',
+  webSearchProvider: 'tavily',
   theme: 'system',
 };
 
 const DEFAULT_OCR = { baseURL: SILICONFLOW_BASE_URL, model: 'deepseek-ai/DeepSeek-OCR' };
-const DEFAULT_DOCUMENT_PARSER = DEFAULT_SETTINGS.documentParser;
-
 async function ensureKvTable() {
   const db = await getDB();
   await db.execAsync(
@@ -125,6 +112,7 @@ function normalizeSettings(s: any): AppSettings {
     ocr: s.ocr?.baseURL ? s.ocr : DEFAULT_OCR,
     documentParser: normalizeDocumentParser(s.documentParser),
     tavilySearchDepth: s.tavilySearchDepth === 'advanced' ? 'advanced' : 'basic',
+    webSearchProvider: s.webSearchProvider === 'bocha' ? 'bocha' : 'tavily',
     theme: s.theme ?? 'system',
   };
 }
@@ -145,37 +133,8 @@ function normalizeNumber(value: unknown, fallback: number, min: number, max: num
 }
 
 function normalizeDocumentParser(s: any): AppSettings['documentParser'] {
-  const provider = s?.provider === 'aliyun' ? 'aliyun' : 'llamaparse';
-  return {
-    provider,
-    aliyun: {
-      endpoint:
-        typeof s?.aliyun?.endpoint === 'string' && s.aliyun.endpoint.trim()
-          ? s.aliyun.endpoint.trim()
-          : DEFAULT_DOCUMENT_PARSER.aliyun.endpoint,
-      llmEnhancement: s?.aliyun?.llmEnhancement ?? DEFAULT_DOCUMENT_PARSER.aliyun.llmEnhancement,
-      enhancementMode: s?.aliyun?.enhancementMode === 'VLM' ? 'VLM' : '',
-      oss: {
-        bucket: typeof s?.aliyun?.oss?.bucket === 'string' ? s.aliyun.oss.bucket.trim() : '',
-        endpoint:
-          typeof s?.aliyun?.oss?.endpoint === 'string' && s.aliyun.oss.endpoint.trim()
-            ? s.aliyun.oss.endpoint.trim()
-            : DEFAULT_DOCUMENT_PARSER.aliyun.oss.endpoint,
-        region:
-          typeof s?.aliyun?.oss?.region === 'string' && s.aliyun.oss.region.trim()
-            ? s.aliyun.oss.region.trim()
-            : DEFAULT_DOCUMENT_PARSER.aliyun.oss.region,
-        prefix:
-          typeof s?.aliyun?.oss?.prefix === 'string' && s.aliyun.oss.prefix.trim()
-            ? s.aliyun.oss.prefix.trim()
-            : DEFAULT_DOCUMENT_PARSER.aliyun.oss.prefix,
-        urlExpiresSeconds:
-          typeof s?.aliyun?.oss?.urlExpiresSeconds === 'number'
-            ? s.aliyun.oss.urlExpiresSeconds
-            : DEFAULT_DOCUMENT_PARSER.aliyun.oss.urlExpiresSeconds,
-      },
-    },
-  };
+  // 旧版本可能保存了其他解析器配置，移动端统一使用本地优先 + LlamaParse 回退。
+  return { provider: 'llamaparse' };
 }
 
 // 旧结构 { baseURL, models[], defaultModel } → 新多服务商结构
@@ -276,6 +235,19 @@ export async function deleteTavilyKey(): Promise<void> {
   return deleteProviderKey('tavily');
 }
 
+// ---- Bocha 联网搜索的 key（复用 per-provider 机制，id 固定 'bocha'）----
+export async function getBochaKey(): Promise<string | null> {
+  return getProviderKey('bocha');
+}
+
+export async function setBochaKey(key: string): Promise<void> {
+  return setProviderKey('bocha', key);
+}
+
+export async function deleteBochaKey(): Promise<void> {
+  return deleteProviderKey('bocha');
+}
+
 // ---- LlamaParse 文档解析的 key（复用 per-provider 机制，id 固定 'llamaparse'）----
 export async function getLlamaParseKey(): Promise<string | null> {
   return getProviderKey('llamaparse');
@@ -287,30 +259,5 @@ export async function setLlamaParseKey(key: string): Promise<void> {
 
 export async function deleteLlamaParseKey(): Promise<void> {
   return deleteProviderKey('llamaparse');
-}
-
-// ---- 阿里云文档解析（大模型版）AccessKey ----
-export async function getAliyunAccessKeyId(): Promise<string | null> {
-  return getProviderKey('aliyun_docmind_access_key_id');
-}
-
-export async function setAliyunAccessKeyId(key: string): Promise<void> {
-  return setProviderKey('aliyun_docmind_access_key_id', key);
-}
-
-export async function deleteAliyunAccessKeyId(): Promise<void> {
-  return deleteProviderKey('aliyun_docmind_access_key_id');
-}
-
-export async function getAliyunAccessKeySecret(): Promise<string | null> {
-  return getProviderKey('aliyun_docmind_access_key_secret');
-}
-
-export async function setAliyunAccessKeySecret(secret: string): Promise<void> {
-  return setProviderKey('aliyun_docmind_access_key_secret', secret);
-}
-
-export async function deleteAliyunAccessKeySecret(): Promise<void> {
-  return deleteProviderKey('aliyun_docmind_access_key_secret');
 }
 

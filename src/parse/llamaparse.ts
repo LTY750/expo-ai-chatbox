@@ -2,6 +2,7 @@
 // 流程：上传文件(multipart) → 创建解析任务 → 轮询状态 → 取 markdown
 // API 文档：https://developers.llamaindex.ai/llamaparse/parse/getting_started/
 import { fetch as expoFetch } from 'expo/fetch';
+import { File } from 'expo-file-system';
 import type { PickedFile } from './index';
 
 const BASE = 'https://api.cloud.llamaindex.ai';
@@ -16,12 +17,10 @@ export interface LlamaParseConfig {
 async function uploadFile(f: PickedFile, apiKey: string, signal?: AbortSignal): Promise<string> {
   const fd = new FormData();
   fd.append('purpose', 'parse');
-  // RN 的 FormData 接受 {uri, name, type} 作为文件
-  fd.append('file', {
-    uri: f.uri,
-    name: f.name,
-    type: f.mimeType || 'application/octet-stream',
-  } as any);
+  // Expo SDK 56 的 expo/fetch multipart 转换器支持 File/Blob；直接传
+  // `{ uri }` 会在原生环境被识别为不支持的 FormData part。
+  const file = new File(f.uri);
+  fd.append('file', file, f.name);
 
   const res = await expoFetch(`${BASE}/api/v1/beta/files`, {
     method: 'POST',
@@ -41,7 +40,7 @@ async function uploadFile(f: PickedFile, apiKey: string, signal?: AbortSignal): 
 
 // 创建解析任务，返回 job_id
 async function createParseJob(fileId: string, apiKey: string, signal?: AbortSignal): Promise<string> {
-  const res = await expoFetch(`${BASE}/api/parsing/upload`, {
+  const res = await expoFetch(`${BASE}/api/v2/parse`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -49,7 +48,8 @@ async function createParseJob(fileId: string, apiKey: string, signal?: AbortSign
     },
     body: JSON.stringify({
       file_id: fileId,
-      parse_config: { result_type: 'markdown' },
+      tier: 'cost_effective',
+      version: 'latest',
     }),
     signal,
   });
@@ -58,7 +58,7 @@ async function createParseJob(fileId: string, apiKey: string, signal?: AbortSign
     throw new Error(`LlamaParse 创建任务失败 HTTP ${res.status}: ${text.slice(0, 300)}`);
   }
   const json = await res.json();
-  const id = json?.id ?? json?.job_id;
+  const id = json?.id ?? json?.job_id ?? json?.job?.id;
   if (typeof id !== 'string') throw new Error('LlamaParse 创建任务响应缺少 job id');
   return id;
 }
@@ -69,7 +69,7 @@ async function pollResult(jobId: string, apiKey: string, signal?: AbortSignal): 
   while (Date.now() - start < POLL_MAX_MS) {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
     await sleep(POLL_INTERVAL_MS);
-    const res = await expoFetch(`${BASE}/api/parsing/job/${jobId}`, {
+    const res = await expoFetch(`${BASE}/api/v2/parse/${encodeURIComponent(jobId)}?expand=markdown`, {
       method: 'GET',
       headers: { Authorization: `Bearer ${apiKey}` },
       signal,
@@ -79,13 +79,17 @@ async function pollResult(jobId: string, apiKey: string, signal?: AbortSignal): 
       throw new Error(`LlamaParse 轮询失败 HTTP ${res.status}: ${text.slice(0, 300)}`);
     }
     const json = await res.json();
-    const status = json?.status;
+    // v2 的查询响应把任务字段放在 job 下；兼容可能存在的顶层旧格式。
+    const status = String(json?.job?.status ?? json?.status ?? '').toUpperCase();
     if (status === 'SUCCESS' || status === 'COMPLETED') {
-      // 取结果（markdown）
-      return extractMarkdown(json) ?? (await fetchResultMarkdown(jobId, apiKey, signal));
+      const markdown = extractMarkdown(json);
+      if (markdown) return markdown;
+      throw new Error('LlamaParse 已完成，但响应中没有 Markdown 结果');
     }
-    if (status === 'ERROR' || status === 'FAILED') {
-      throw new Error(`LlamaParse 解析失败：${JSON.stringify(json?.error ?? json).slice(0, 300)}`);
+    if (status === 'ERROR' || status === 'FAILED' || status === 'CANCELLED') {
+      throw new Error(
+        `LlamaParse 解析失败：${String(json?.job?.error_message ?? json?.error_message ?? json?.error ?? status).slice(0, 300)}`
+      );
     }
     // PENDING / PROCESSING 继续轮询
   }
@@ -94,26 +98,28 @@ async function pollResult(jobId: string, apiKey: string, signal?: AbortSignal): 
 
 // 从轮询响应里尝试直接取 markdown（部分版本内联返回）
 function extractMarkdown(json: any): string | null {
+  if (typeof json?.markdown_full === 'string' && json.markdown_full) return json.markdown_full;
   if (typeof json?.markdown === 'string' && json.markdown) return json.markdown;
+  const pages = json?.markdown?.pages;
+  if (Array.isArray(pages)) {
+    const markdown = pages
+      .map((page: any) => (typeof page?.markdown === 'string' ? page.markdown : ''))
+      .filter(Boolean)
+      .join('\n\n');
+    if (markdown) return markdown;
+  }
   const md = json?.result?.markdown;
   if (typeof md === 'string' && md) return md;
-  return null;
-}
-
-// 显式拉取结果 markdown
-async function fetchResultMarkdown(jobId: string, apiKey: string, signal?: AbortSignal): Promise<string> {
-  const res = await expoFetch(`${BASE}/api/parsing/job/${jobId}/result?format=markdown`, {
-    method: 'GET',
-    headers: { Authorization: `Bearer ${apiKey}` },
-    signal,
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`LlamaParse 取结果失败 HTTP ${res.status}: ${text.slice(0, 300)}`);
+  if (typeof json?.text_full === 'string' && json.text_full) return json.text_full;
+  const textPages = json?.text?.pages;
+  if (Array.isArray(textPages)) {
+    const text = textPages
+      .map((page: any) => (typeof page?.text === 'string' ? page.text : ''))
+      .filter(Boolean)
+      .join('\n\n');
+    if (text) return text;
   }
-  const json = await res.json();
-  // 结果格式可能是 { markdown: "..." } 或 { result: { markdown } }
-  return extractMarkdown(json) ?? json?.result ?? '';
+  return null;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -127,7 +133,14 @@ export async function parseDocument(
   signal?: AbortSignal
 ): Promise<string> {
   const fileId = await uploadFile(f, config.apiKey, signal);
-  const jobId = await createParseJob(fileId, config.apiKey, signal);
-  const md = await pollResult(jobId, config.apiKey, signal);
-  return md;
+  try {
+    const jobId = await createParseJob(fileId, config.apiKey, signal);
+    return await pollResult(jobId, config.apiKey, signal);
+  } finally {
+    // 解析完成或失败后删除云端临时文件，避免长期占用账户存储。
+    await expoFetch(`${BASE}/api/v1/beta/files/${encodeURIComponent(fileId)}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${config.apiKey}` },
+    }).catch(() => undefined);
+  }
 }

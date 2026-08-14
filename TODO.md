@@ -15,9 +15,9 @@
 - [x] 多服务商管理 +「获取模型」一键拉取
 - [x] 消息级操作：复制 / 编辑重发 / 重新生成 / 删除
 - [x] 文档解析：txt/md/csv 本地 + 图片 OCR（DeepSeek-OCR）
-- [x] **联网搜索（Tavily，模型可调用的工具）** — 立项三大诉求最后一项已完成
+- [x] **联网搜索（Tavily / Bocha，模型可调用的工具）** — 立项三大诉求最后一项已完成
 - [x] **LlamaParse 文档解析（PDF / Word / PPT / Excel）**
-- [x] **阿里云文档解析（大模型版）（PDF / Word / PPT / Excel，OSS 临时 URL 链路已接入）**
+- [x] **纯文本本地优先 + LlamaParse 回退（PDF / Word / PPT / Excel）**
 - [x] **深色模式（跟随系统 / 浅 / 深）**
 - [x] **LaTeX 数学公式渲染（MathView，webview）**
 - [x] **Mermaid 图表渲染（MermaidView，webview）**
@@ -31,12 +31,10 @@
 ## 已知问题
 - 模型会自称 Claude（LLM 自我认知不可靠的通病，非 bug）
 - 改原生模块后 Fast Refresh 不够，需重启 Expo Go 才生效
-- Tavily / LlamaParse / 阿里云文档解析（大模型版）已通过编译与运行，但**功能正确性待配 key 实测**
-- 阿里云文档解析（大模型版）踩坑记录：`SubmitDocParserJob` 要求 `FileUrl`；官方 SDK 的 `SubmitDocParserJobAdvance + fileUrlObject` 是 SDK 封装的本地文件流上传能力，Expo 客户端手写 multipart 会被服务端当成 URL 模式并报 `FileUrl is mandatory`。当前改为 OSS 临时上传 + 签名 URL + `FileUrl`。
+- Tavily / Bocha / LlamaParse 已通过编译，但**功能正确性待配 key 实测**
 
 ## 下一步
-- [ ] 实测联网搜索（配 Tavily key）、LlamaParse、阿里云文档解析（大模型版，需 RAM + OSS 配置）
-- [ ] 给 OSS Bucket 配生命周期规则：自动删除 `chatbox-docs/` 下超过 1 天的临时文件
+- [ ] 实测联网搜索（配 Tavily 或 Bocha key）和 LlamaParse（配 Llama Cloud key）
 - [ ] 字体设置
 - [ ] 助手角色 / Prompt 模板
 - [ ] 数据导入导出

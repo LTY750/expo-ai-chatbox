@@ -29,15 +29,12 @@ import {
   getTavilyKey,
   setTavilyKey as setTavilyKeySecret,
   deleteTavilyKey as deleteTavilyKeySecret,
+  getBochaKey,
+  setBochaKey as setBochaKeySecret,
+  deleteBochaKey as deleteBochaKeySecret,
   getLlamaParseKey,
   setLlamaParseKey as setLlamaParseKeySecret,
   deleteLlamaParseKey as deleteLlamaParseKeySecret,
-  getAliyunAccessKeyId,
-  setAliyunAccessKeyId,
-  deleteAliyunAccessKeyId,
-  getAliyunAccessKeySecret,
-  setAliyunAccessKeySecret,
-  deleteAliyunAccessKeySecret,
 } from './settings';
 import { makeProvider } from './providers/factory';
 import { buildChatMessages, type ToolDef, type ToolExecutor } from './providers/base';
@@ -128,16 +125,22 @@ async function touchSession(
   }));
 }
 
-// 构造联网搜索工具配置（开关打开且有 Tavily key 时才启用）
+// 构造联网搜索工具配置（开关打开且有当前 provider key 时才启用）
 async function buildTools(
   get: () => ChatState
 ): Promise<{ tools?: ToolDef[]; executeTool?: ToolExecutor }> {
   if (!get().webSearchEnabled) return {};
-  const tavilyKey = await getTavilyKey();
-  if (!tavilyKey) return {};
+  const provider = get().settings.webSearchProvider;
+  const [tavilyKey, bochaKey] = await Promise.all([getTavilyKey(), getBochaKey()]);
+  if (provider === 'bocha' ? !bochaKey : !tavilyKey) return {};
   return {
     tools: getEnabledTools(),
-    executeTool: makeToolExecutor(tavilyKey, get().settings.tavilySearchDepth),
+    executeTool: makeToolExecutor({
+      provider,
+      tavilyKey: tavilyKey ?? undefined,
+      bochaKey: bochaKey ?? undefined,
+      searchDepth: get().settings.tavilySearchDepth,
+    }),
   };
 }
 
@@ -175,32 +178,6 @@ async function preflightChat(
     throw new Error('当前会话所选模型已不存在，请重新选择模型');
   }
   return { provider, apiKey, effective };
-}
-
-async function replaceAliyunDocKeys(
-  nextId: string | null,
-  nextSecret: string | null
-): Promise<void> {
-  const previousId = await getAliyunAccessKeyId();
-  const previousSecret = await getAliyunAccessKeySecret();
-  try {
-    if (nextId) await setAliyunAccessKeyId(nextId);
-    else await deleteAliyunAccessKeyId();
-
-    if (nextSecret) await setAliyunAccessKeySecret(nextSecret);
-    else await deleteAliyunAccessKeySecret();
-  } catch (error) {
-    // SecureStore 没有事务；失败时尽力恢复调用前的成对状态。
-    try {
-      if (previousId) await setAliyunAccessKeyId(previousId);
-      else await deleteAliyunAccessKeyId();
-    } catch {}
-    try {
-      if (previousSecret) await setAliyunAccessKeySecret(previousSecret);
-      else await deleteAliyunAccessKeySecret();
-    } catch {}
-    throw error;
-  }
 }
 
 // 共享流式逻辑：在 sessionId 下，基于持久化历史新建 assistant 占位并流式生成
@@ -391,10 +368,10 @@ interface ChatState {
   // 联网搜索
   webSearchEnabled: boolean; // 联网开关（运行时状态，不持久化）
   tavilyReady: boolean; // 是否已配置 Tavily key
+  bochaReady: boolean; // 是否已配置 Bocha key
 
   // LlamaParse 文档解析
   llamaparseReady: boolean; // 是否已配置 LlamaParse key
-  aliyunDocReady: boolean; // 是否已配置阿里云文档解析 AK
 
   // 主题
   themeMode: ThemeMode;
@@ -443,12 +420,12 @@ interface ChatState {
   toggleWebSearch: () => void;
   saveTavilyKey: (key: string) => Promise<void>;
   deleteTavilyKey: () => Promise<void>;
+  saveBochaKey: (key: string) => Promise<void>;
+  deleteBochaKey: () => Promise<void>;
 
   // LlamaParse 文档解析
   saveLlamaParseKey: (key: string) => Promise<void>;
   deleteLlamaParseKey: () => Promise<void>;
-  saveAliyunDocKeys: (accessKeyId: string, accessKeySecret: string) => Promise<void>;
-  deleteAliyunDocKeys: () => Promise<void>;
 }
 
 // 取当前服务商
@@ -469,8 +446,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   activeStream: null,
   webSearchEnabled: false,
   tavilyReady: false,
+  bochaReady: false,
   llamaparseReady: false,
-  aliyunDocReady: false,
   themeMode: 'system',
 
   async init() {
@@ -481,20 +458,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
     ]);
     const prov = curProvider(settings);
     const key = prov ? await getProviderKey(prov.id) : null;
-    const tavilyKey = await getTavilyKey();
+    const [tavilyKey, bochaKey] = await Promise.all([getTavilyKey(), getBochaKey()]);
     const llamaParseKey = await getLlamaParseKey();
-    const [aliyunKeyId, aliyunSecret] = await Promise.all([
-      getAliyunAccessKeyId(),
-      getAliyunAccessKeySecret(),
-    ]);
     set({
       settings,
       themeMode: settings.theme,
       sessions,
       keyReady: !!key,
       tavilyReady: !!tavilyKey,
+      bochaReady: !!bochaKey,
       llamaparseReady: !!llamaParseKey,
-      aliyunDocReady: !!aliyunKeyId && !!aliyunSecret,
       initialized: true,
     });
     if (sessions.length > 0) {
@@ -866,13 +839,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
       set({ tavilyReady: true });
     } else {
       await deleteTavilyKeySecret();
-      set({ tavilyReady: false, webSearchEnabled: false });
+      set((state) => ({
+        tavilyReady: false,
+        ...(state.settings.webSearchProvider === 'tavily' ? { webSearchEnabled: false } : {}),
+      }));
     }
   },
 
   async deleteTavilyKey() {
     await deleteTavilyKeySecret();
-    set({ tavilyReady: false, webSearchEnabled: false });
+    set((state) => ({
+      tavilyReady: false,
+      ...(state.settings.webSearchProvider === 'tavily' ? { webSearchEnabled: false } : {}),
+    }));
   },
 
   async saveLlamaParseKey(key) {
@@ -891,21 +870,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({ llamaparseReady: false });
   },
 
-  async saveAliyunDocKeys(accessKeyId, accessKeySecret) {
-    const id = accessKeyId.trim();
-    const secret = accessKeySecret.trim();
-    if (id && secret) {
-      await replaceAliyunDocKeys(id, secret);
-      set({ aliyunDocReady: true });
+  async saveBochaKey(key) {
+    const trimmed = key.trim();
+    if (trimmed) {
+      await setBochaKeySecret(trimmed);
+      set({ bochaReady: true });
     } else {
-      await replaceAliyunDocKeys(null, null);
-      set({ aliyunDocReady: false });
+      await deleteBochaKeySecret();
+      set((state) => ({
+        bochaReady: false,
+        ...(state.settings.webSearchProvider === 'bocha' ? { webSearchEnabled: false } : {}),
+      }));
     }
   },
 
-  async deleteAliyunDocKeys() {
-    await replaceAliyunDocKeys(null, null);
-    set({ aliyunDocReady: false });
+  async deleteBochaKey() {
+    await deleteBochaKeySecret();
+    set((state) => ({
+      bochaReady: false,
+      ...(state.settings.webSearchProvider === 'bocha' ? { webSearchEnabled: false } : {}),
+    }));
   },
 
   // 解析一个文件，返回带正文的待发送附件（含 parsing→done/error 状态）
@@ -921,35 +905,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
       text: '',
     };
     try {
-      const [ocrKey, llamaParseKey, aliyunKeyId, aliyunSecret] = await Promise.all([
+      const [ocrKey, llamaParseKey] = await Promise.all([
         getOcrKey(),
         getLlamaParseKey(),
-        getAliyunAccessKeyId(),
-        getAliyunAccessKeySecret(),
       ]);
-      const docParser = get().settings.documentParser;
       const result = await parseFile(
         file,
         { baseURL: ocr.baseURL, model: ocr.model, apiKey: ocrKey ?? '' },
-        docParser.provider === 'aliyun'
-          ? {
-              provider: 'aliyun',
-              aliyun:
-                aliyunKeyId && aliyunSecret
-                  ? {
-                      accessKeyId: aliyunKeyId,
-                      accessKeySecret: aliyunSecret,
-                      endpoint: docParser.aliyun.endpoint,
-                      llmEnhancement: docParser.aliyun.llmEnhancement,
-                      enhancementMode: docParser.aliyun.enhancementMode,
-                      oss: docParser.aliyun.oss,
-                    }
-                  : undefined,
-            }
-          : {
-              provider: 'llamaparse',
-              llamaParse: llamaParseKey ? { apiKey: llamaParseKey } : undefined,
-            }
+        { provider: 'llamaparse', llamaParse: llamaParseKey ? { apiKey: llamaParseKey } : undefined }
       );
       return {
         ...base,
